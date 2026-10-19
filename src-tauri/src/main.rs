@@ -354,7 +354,9 @@ fn main() {
         .expect("error while building the tauri application")
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
-                kill_backend(app_handle.state::<Arc<Shared>>());
+                // State<'_, Arc<Shared>> derefs to Arc<Shared>; pass the inner
+                // reference that kill_backend expects.
+                kill_backend(app_handle.state::<Arc<Shared>>().inner());
             }
         });
 }
