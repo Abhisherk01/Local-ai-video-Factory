@@ -127,3 +127,43 @@ def test_stop_is_idempotent_and_fast(tmp_path: Path) -> None:
     worker.stop()  # second call must not raise
     assert time.monotonic() - started < 3.0
     assert not worker.is_alive()
+
+
+def test_non_retryable_handler_error_fails_immediately(tmp_path: Path) -> None:
+    """Deterministic failures must not burn their remaining attempts:
+    a NonRetryable error ends the job on attempt 1."""
+    from laf.jobs import queue
+    from laf.jobs.handlers import HandlerContext, NonRetryable
+
+    data_dir = tmp_path / "data"
+    db_path = data_dir / "laf.db"
+    conn = connect(db_path)
+    from laf.db import ensure_schema
+
+    ensure_schema(conn)
+    job, _ = queue.enqueue(conn, "doomed", payload={})
+    conn.close()
+
+    def doomed(payload: dict, job: dict, ctx: HandlerContext) -> dict:
+        raise NonRetryable("store target gone - retrying cannot fix it")
+
+    worker = Worker(
+        db_path,
+        data_dir=data_dir,
+        models_dir=tmp_path / "models",
+        poll_interval_s=0.05,
+        handlers={"doomed": doomed},
+    )
+    worker.start()
+    try:
+        conn = connect(db_path)
+        try:
+            done = wait_for_job(conn, int(job["id"]), timeout_s=10.0)
+            assert done["status"] == "failed"
+            assert done["attempts"] == 1
+            assert done["error"].startswith("non_retryable:")
+            assert "store target gone" in done["error"]
+        finally:
+            conn.close()
+    finally:
+        worker.stop()

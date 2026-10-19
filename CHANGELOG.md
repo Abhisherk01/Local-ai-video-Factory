@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.4.0 - Phase 4: scene planner, storyboard, style registry, series
+
+### Added
+- Scene planner + storyboard (ADR-011): a scripted episode can now be
+  split into 3-8 ordered scenes, each with its narration slice, a
+  composed text-to-image visual prompt, and a presentation-pace
+  duration estimate (~2.5 words/s, computed locally - never invented
+  by the model). Migration 0003 ships `styles`, `storyboards`,
+  `storyboard_scenes`, `series` and `episodes.series_id`.
+- Style registry: 6 builtin visual styles seeded by the migration
+  (dark_cinematic, clean_product, warm_documentary, bold_motion,
+  retro_analog, minimal_mono); custom styles creatable via
+  /api/v1/styles; builtins are undeletable. A style is a reusable
+  prompt prefix + suffix pair that conditions every scene prompt.
+- Series generation: one premise expands into a season of episode
+  drafts (series_outline_gen on Ollama, series_outline_fallback for
+  the model-free path - 20 fixed lexically-distinct angles). Outline
+  candidates pass deterministic duplicate detection (laf.dedupe:
+  normalized token-set Jaccard, function-word stoplist, conservative
+  plural folding, 0.6 threshold); duplicates are skipped and reported
+  in the job result, never silently dropped. Gate: the 20-episode
+  sample outline passes duplicate detection model-free (tested).
+- NonRetryable job errors (ADR-010 extension): deterministic failures
+  (episode/script/style/series missing) fail the job on attempt 1
+  instead of burning the remaining attempts - closes the phase-3
+  field lesson from the "episode disappeared mid-job" incident.
+- Handlers: storyboard_gen, storyboard_fallback, series_outline_gen,
+  series_outline_fallback (registry now 8 types). Model JSON is
+  parsed tolerantly (code fences stripped, retryable on invalid
+  output); narration splitting is deterministic, so no narration is
+  ever lost or invented between scenes on any path.
+- API: /api/v1/styles (list/create/delete), /api/v1/series (create +
+  outline job, list, inspect, delete), /api/v1/episodes/{id}/storyboard
+  (enqueue + fetch; 400 on unscripted episodes and unknown styles).
+- Pipeline UI: per-episode style picker + Storyboard action + inline
+  scene-plan panel (honest method label per scene plan); Series card
+  with outline generation, live job status and accepted/skipped
+  counts; storyboarded status chip; series tag on episode rows.
+- Tests: 76 -> 108 (dedupe unit + 20-episode gate, storyboard
+  handlers incl. fake Ollama JSON/fences/wrong-count paths, series
+  acceptance + skip reporting, API surface, worker NonRetryable
+  integration).
+
+### Fixed
+- Backend: `episode N disappeared mid-job` is now classified
+  non-retryable (was: two wasted full generations before the job
+  ended failed; observed in the field on 0.3.0).
+
+### Notes
+- No Rust changes in this release; the Windows shell is untouched
+  (version bump only), so no MSVC compile risk is introduced.
+- ollama generate calls for storyboard/series pass `num_ctx: 8192`
+  explicitly to avoid silent context truncation on longer scripts.
+- LAF_OLLAMA_TIMEOUT (introduced in 0.3.0 hotfix ccc9fc8) applies to
+  the new generation paths as well; default 600 s.
+
 ## 0.3.0 - Phase 3: content pipeline foundations
 
 ### Added
@@ -25,6 +81,13 @@
 - Tests: 29 → 76 (queue mechanics, handler contracts incl. a fake
   Ollama HTTP server, cross-platform Piper stub, API coverage, worker
   end-to-end + crash-recovery reclaim).
+
+### Fixed
+- Shell: enable the windows-sys `Win32_System_Threading` feature —
+  `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` is feature-gated behind it
+  despite living in the JobObjects module, which broke the MSVC compile
+  of the Job Object kill-on-close fix (caught by owner-hardware
+  verification; shipped in the phase3-r2 zip).
 
 ### Notes
 - ADR-009 documents the implemented state names as a deliberate

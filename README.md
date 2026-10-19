@@ -11,8 +11,9 @@ Designed to operate up to **15 YouTube and Instagram accounts** across different
 | 0 | Hardware assessment, licensing, cost boundaries | Done — approved 2026-10-19 |
 | 1 | Repository foundation, architecture decisions, design system, Git workflow | Done — verified on owner hardware 2026-10-19 |
 | 2 | Desktop shell, first-run wizard, backend, database, health checks | Done — verified on owner hardware 2026-10-19 |
-| 3 | Episode model, durable job queue, Ollama/Piper adapters, pipeline UI | Built — this release (fallback paths test-verified; model-backed paths await installs) |
-| 3–14 | Models, series engine, rendering, clipping, channels, publishing, analytics, packaging | Planned — see [ROADMAP.md](ROADMAP.md) |
+| 3 | Episode model, durable job queue, Ollama/Piper adapters, pipeline UI | Done — verified on owner hardware 2026-10-20 (script via local qwen3:4b) |
+| 4 | Scene planner, storyboard, style registry, series generation | Built — this release (108 tests; owner verification pending) |
+| 4–14 | Rendering, clipping, channels, publishing, analytics, packaging | Planned — see [ROADMAP.md](ROADMAP.md) |
 
 Build machine profile: **Tier 3** (RTX 2050 4 GB VRAM, 16 GB RAM, i5-12450H) — full analysis in [docs/PHASE0-HARDWARE-ASSESSMENT.md](docs/PHASE0-HARDWARE-ASSESSMENT.md).
 
@@ -56,7 +57,7 @@ py -3.12 -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r backend/requirements-dev.txt
 
-# 3. Run the test suite (expect: 29 passed)
+# 3. Run the test suite (expect: 108 passed)
 pytest -q
 
 # 4. Install frontend dependencies and run the desktop app (first Rust build takes minutes)
@@ -89,6 +90,18 @@ ollama pull qwen3:4b
 The app's Pipeline tab shows live adapter chips; `/api/v1/adapters`
 reports exactly what it detected and what to fix.
 
+## Phase 4 in one paragraph
+
+A scripted episode becomes a **scene plan**: 3-8 ordered scenes, each
+with its narration slice, a composed text-to-image prompt in a chosen
+visual style (6 built-in styles, custom styles supported), and a
+duration estimate. A **series premise** expands into a season of
+episode drafts; near-duplicate ideas are detected deterministically
+(normalized token-set Jaccard) and skipped with an honest report.
+Every path has a model-free fallback (deterministic split / 20-angle
+outline) so the whole workflow is provable before any model is
+installed — method labels on results always say which ran.
+
 ## Documentation index
 
 | Doc | Contents |
@@ -111,13 +124,21 @@ reports exactly what it detected and what to fix.
 3. No secrets, model weights, generated media, or account data ever enter Git.
 4. Every non-free or non-local capability is labeled, off by default, and honest about its limits.
 
-## Known limitations (Phase 3, stated honestly)
+## Known limitations (Phase 4, stated honestly)
 
 - The desktop app runs from the development layout (`npm run tauri dev`); a packaged installer arrives in Phase 13.
 - The shell resolves Python from the repo venv, `py -3.12`, or `LAF_PYTHON` — a bundled runtime comes with packaging.
 - Migrations are forward-only; destructive-change down-migrations are deferred until the schema stabilizes.
 - The wizard reports prerequisites; it never installs anything by itself.
-- Phase 3 ships the script + TTS-audio steps of the pipeline; model-backed script generation needs Ollama installed (`LAF_OLLAMA_URL`/`LAF_OLLAMA_MODEL` override defaults) and real speech needs Piper (`LAF_PIPER`/`LAF_PIPER_VOICE`). Without them the honest fallback paths run: template scripts and a labeled placeholder tone — never passed off as AI output.
+- Phase 4 ships the script → storyboard → series-outline steps of the
+  pipeline; model-backed generation needs Ollama installed
+  (`LAF_OLLAMA_URL`/`LAF_OLLAMA_MODEL`/`LAF_OLLAMA_TIMEOUT` override
+  defaults) and real speech needs Piper (`LAF_PIPER`/`LAF_PIPER_VOICE`).
+  Without them the honest fallback paths run: template scripts,
+  deterministic scene splits / shot templates, and the 20-angle series
+  outline — never passed off as AI output. Storyboard visuals are
+  text prompts only in this phase; actual image/video generation is
+  Phase 5+ (ADR-004).
 - Kokoro TTS is probe-only in this release; its synthesis wiring lands in Phase 5 (ADR-010).
 - Job cancellation applies to queued jobs; in-handler cooperative cancellation lands with queue hardening (roadmap row 8).
 

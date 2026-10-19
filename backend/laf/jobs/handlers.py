@@ -1,21 +1,31 @@
-"""Phase 3 job handlers (registry).
+"""Phase 3+4 job handlers (registry).
 
 Every handler: `fn(payload: dict, job: dict, ctx: HandlerContext) -> dict`.
 Returning a dict marks the job succeeded with that result payload.
 Raising marks it failed; `PrereqMissing` fails it immediately (no
 retry - an absent Ollama/Piper install does not heal in 2 seconds).
+`NonRetryable` (Phase 4) fails it immediately too: the error is
+deterministic (episode/script/style/series missing), so the two extra
+attempts would only burn generation time (phase-3 field lesson from the
+"episode disappeared mid-job" incident).
 
 Method labels are honest by design (ADR-010):
-- script_gen      -> method "local_ollama"  (or fallback template)
-- script_fallback -> method "fallback_template"
-- tts_render      -> method "local_piper"   (or fallback tone)
-- tts_fallback    -> method "fallback_tone"
+- script_gen         -> method "local_ollama"  (or fallback template)
+- script_fallback    -> method "fallback_template"
+- storyboard_gen     -> method "local_ollama"  (or fallback split)
+- storyboard_fallback-> method "fallback_split"
+- series_outline_gen -> method "local_ollama"  (or fallback angles)
+- series_outline_fallback -> method "fallback_angles"
+- tts_render         -> method "local_piper"   (or fallback tone)
+- tts_fallback       -> method "fallback_tone"
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import re
 import struct
 import wave
 from dataclasses import dataclass
@@ -23,13 +33,31 @@ from pathlib import Path
 from typing import Any, Callable
 
 from laf.adapters import AdapterUnavailable, OllamaAdapter, PiperAdapter
-from laf.episodes import set_episode_script
+from laf.dedupe import filter_duplicates
+from laf.episodes import create_episode, get_episode, set_episode_script
+from laf.series import (
+    fallback_outline,
+    get_series,
+    list_series_episodes,
+    set_series_method,
+)
+from laf.storyboards import replace_storyboard
+from laf.styles import DEFAULT_STYLE_SLUG, get_style
 
 logger = logging.getLogger("laf.jobs.handlers")
 
 
 class PrereqMissing(RuntimeError):
     """A local prerequisite (Ollama daemon, piper voice) is absent."""
+
+
+class NonRetryable(RuntimeError):
+    """Deterministic handler failure; retrying cannot heal it.
+
+    The worker fails the job on the spot instead of burning the
+    remaining attempts (and, on model paths, another full generation)
+    on an error that will identically recur.
+    """
 
 
 @dataclass
@@ -86,7 +114,9 @@ def _store_script(ctx: HandlerContext, job: dict, text: str, method: str) -> Non
         ctx.conn, int(episode_id), script_text=text, script_method=method
     )
     if episode is None:
-        raise RuntimeError(f"episode {episode_id} disappeared mid-job")
+        # Deterministic: the store target is gone, a re-run would
+        # generate another full script only to hit the same wall.
+        raise NonRetryable(f"episode {episode_id} disappeared mid-job")
 
 
 def handle_script_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
@@ -129,6 +159,337 @@ def handle_script_fallback(payload: dict, job: dict, ctx: HandlerContext) -> dic
     text = _fallback_script(topic, int(payload.get("target_words", 150)))
     _store_script(ctx, job, text, "fallback_template")
     return {"method": "fallback_template", "chars": len(text)}
+
+
+# ---------------------------------------------------------------------------
+# storyboard handlers (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+_JSON_SYSTEM = (
+    "You are a video production assistant. Output ONLY valid JSON. "
+    "No markdown fences, no commentary, no notes."
+)
+
+_FENCE_RE = re.compile(r"```[a-zA-Z]*\n?")
+
+_SCENE_ROLES = (
+    "establishing shot",
+    "close-up detail shot",
+    "medium action shot",
+    "on-screen text shot",
+    "cutaway detail shot",
+    "dynamic motion shot",
+    "warm closing shot",
+    "end card shot",
+)
+
+
+def _load_json_object(text: str) -> dict:
+    """Tolerant JSON extraction: strips code fences, slices the outermost
+    braces, raises RuntimeError (retryable) on anything unparseable."""
+    cleaned = _FENCE_RE.sub("", str(text))
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start == -1 or end <= start:
+        raise RuntimeError("model output contained no JSON object")
+    try:
+        data = json.loads(cleaned[start : end + 1])
+    except ValueError as exc:
+        raise RuntimeError(f"model JSON invalid: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("model JSON was not an object")
+    return data
+
+
+def _scene_count(script: str) -> int:
+    """Target scene count from script length (~35 words per scene),
+    clamped to 3-8 and never more than the sentence count."""
+    words = len(script.split())
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+    n = max(3, min(8, words // 35))
+    return max(1, min(n, len(sentences)))
+
+
+def _split_narration(script: str, n: int) -> list[str]:
+    """Split the script into n ordered narration slices.
+
+    Deterministic: sentences in order, distributed as evenly as
+    possible. Concatenated slices reproduce the whole script, so no
+    narration is ever lost or invented between scenes.
+    """
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+    if not sentences:  # single unpunctuated line
+        sentences = [script.strip()]
+    base, extra = divmod(len(sentences), n)
+    slices: list[str] = []
+    at = 0
+    for i in range(n):
+        size = base + (1 if i < extra else 0)
+        chunks = sentences[at : at + size]
+        at += size
+        if chunks:
+            slices.append(" ".join(chunks))
+    return slices or [script.strip()]
+
+
+def _visual_prompt(style: dict, shot: str) -> str:
+    """Compose the final text-to-image prompt: style prefix + shot + suffix."""
+    parts = [
+        str(style.get("prompt_prefix", "")).strip(),
+        shot.strip(),
+        str(style.get("prompt_suffix", "")).strip(),
+    ]
+    return ", ".join(p for p in parts if p)
+
+
+def _storyboard_context(ctx: HandlerContext, job: dict) -> tuple[dict, str]:
+    episode_id = job.get("episode_id")
+    if episode_id is None:
+        raise NonRetryable("storyboard job has no episode bound")
+    ep = get_episode(ctx.conn, int(episode_id))
+    if ep is None:
+        raise NonRetryable(f"episode {episode_id} disappeared mid-job")
+    script = str(ep["script_text"] or "").strip()
+    if not script:
+        raise NonRetryable(
+            f"episode {episode_id} has no script yet - run Script first"
+        )
+    return ep, script
+
+
+def _resolve_style(ctx: HandlerContext, payload: dict) -> dict:
+    slug = str(payload.get("style_slug") or DEFAULT_STYLE_SLUG)
+    style = get_style(ctx.conn, slug)
+    if style is None:
+        raise NonRetryable(f"style '{slug}' is not in the registry")
+    return style
+
+
+def _store_storyboard(
+    ctx: HandlerContext,
+    ep: dict,
+    style: dict,
+    narrations: list[str],
+    shots: list[str],
+    method: str,
+) -> dict:
+    scenes = [
+        {"narration": narr, "visual_prompt": _visual_prompt(style, shot)}
+        for narr, shot in zip(narrations, shots)
+    ]
+    stored = replace_storyboard(
+        ctx.conn,
+        episode_id=int(ep["id"]),
+        style_slug=str(style["slug"]),
+        method=method,
+        scenes=scenes,
+    )
+    if stored is None:
+        raise NonRetryable(f"episode {ep['id']} disappeared mid-job")
+    return {
+        "method": method,
+        "scene_count": int(stored["scene_count"]),
+        "total_duration_s": float(stored["total_duration_s"]),
+        "style": str(style["slug"]),
+    }
+
+
+def _storyboard_prompt(script: str, n: int, style: dict) -> str:
+    return (
+        f"Narration script for a ~60 second vertical video:\n\n{script}\n\n"
+        f"Visual style: {style['name']} - "
+        f"{str(style['prompt_prefix']).strip()}\n\n"
+        f"Plan the shot list: exactly {n} scenes, in script order.\n"
+        'Return ONLY JSON like {"shots": ["shot one", "shot two"]} '
+        f"with exactly {n} items. Each item is one concrete on-screen "
+        "shot description (subject, action, framing, lighting) in the "
+        "given style, max 25 words."
+    )
+
+
+def _parse_shots(text: str, expected: int) -> list[str]:
+    data = _load_json_object(text)
+    shots = data.get("shots")
+    if not isinstance(shots, list):
+        raise RuntimeError("model JSON missing a 'shots' array")
+    out = [str(s).strip() for s in shots if str(s).strip()]
+    if len(out) != expected:
+        raise RuntimeError(
+            f"model returned {len(out)} shots, expected {expected}"
+        )
+    return out
+
+
+def handle_storyboard_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
+    ep, script = _storyboard_context(ctx, job)
+    style = _resolve_style(ctx, payload)
+    n = _scene_count(script)
+    narrations = _split_narration(script, n)
+
+    ollama = OllamaAdapter()
+    status = ollama.available()
+    if not status.available:
+        if payload.get("allow_fallback"):
+            shots = [
+                f"{_SCENE_ROLES[i % len(_SCENE_ROLES)]} illustrating {ep['topic']}"
+                for i in range(n)
+            ]
+            result = _store_storyboard(
+                ctx, ep, style, narrations, shots, "fallback_split"
+            )
+            return {**result, "reason": status.detail}
+        raise PrereqMissing(f"ollama_unavailable: {status.detail}")
+
+    result = ollama.generate(
+        _storyboard_prompt(script, n, style),
+        system=_JSON_SYSTEM,
+        options={"num_ctx": 8192},
+    )
+    shots = _parse_shots(result["text"], n)
+    stored = _store_storyboard(ctx, ep, style, narrations, shots, "local_ollama")
+    return {
+        **stored,
+        "model": result["model"],
+        "thinking_stripped": result["thinking_stripped"],
+    }
+
+
+def handle_storyboard_fallback(payload: dict, job: dict, ctx: HandlerContext) -> dict:
+    ep, script = _storyboard_context(ctx, job)
+    style = _resolve_style(ctx, payload)
+    n = _scene_count(script)
+    narrations = _split_narration(script, n)
+    shots = [
+        f"{_SCENE_ROLES[i % len(_SCENE_ROLES)]} illustrating {ep['topic']}"
+        for i in range(n)
+    ]
+    result = _store_storyboard(ctx, ep, style, narrations, shots, "fallback_split")
+    return {**result, "note": "deterministic shot templates - no model used"}
+
+
+# ---------------------------------------------------------------------------
+# series outline handlers (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def _series_prompt(premise: str, count: int) -> str:
+    return (
+        f"Series premise: {premise}\n\n"
+        f"Propose exactly {count} DISTINCT episode ideas for a short-form "
+        "vertical video series built on this premise. No two ideas may "
+        "cover the same subject.\n"
+        'Return ONLY JSON like {"episodes": [{"title": "...", '
+        '"topic": "..."}]} with exactly '
+        f"{count} items. Each topic is 1-3 sentences of concrete "
+        "narration subject matter."
+    )
+
+
+def _parse_ideas(text: str, max_count: int) -> list[dict[str, str]]:
+    data = _load_json_object(text)
+    eps = data.get("episodes")
+    if not isinstance(eps, list) or not eps:
+        raise RuntimeError("model JSON missing a non-empty 'episodes' array")
+    ideas: list[dict[str, str]] = []
+    for item in eps[:max_count]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        topic = str(item.get("topic", "")).strip()
+        if title and topic:
+            ideas.append({"title": title[:200], "topic": topic[:2000]})
+    if not ideas:
+        raise RuntimeError("model JSON had no usable title/topic pairs")
+    return ideas
+
+
+def _accept_outline(
+    ctx: HandlerContext, series_id: int, ideas: list[dict[str, str]], method: str
+) -> dict:
+    """Dedupe ideas against existing series episodes + each other, then
+    store accepted ones as draft episodes linked to the series."""
+    existing = [
+        str(r["topic"])
+        for r in list_series_episodes(ctx.conn, series_id)
+    ]
+    flags = filter_duplicates([i["topic"] for i in ideas], existing)
+    accepted: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for idea, dup in zip(ideas, flags):
+        if dup:
+            skipped.append(
+                {"title": idea["title"], "reason": "duplicate topic"}
+            )
+            continue
+        create_episode(ctx.conn, title=idea["title"], topic=idea["topic"], series_id=series_id)
+        accepted.append(idea["title"])
+    if accepted:
+        set_series_method(ctx.conn, series_id, method)
+    if not accepted:
+        raise NonRetryable(
+            f"all {len(ideas)} outline candidates were duplicates of "
+            "episodes already in this series"
+        )
+    return {
+        "requested": len(ideas),
+        "accepted": len(accepted),
+        "skipped": skipped,
+        "titles": accepted,
+    }
+
+
+def _series_context(ctx: HandlerContext, payload: dict) -> dict:
+    series_id = payload.get("series_id")
+    if series_id is None:
+        raise NonRetryable("series job has no series bound")
+    series = get_series(ctx.conn, int(series_id))
+    if series is None:
+        raise NonRetryable(f"series {series_id} disappeared mid-job")
+    return series
+
+
+def handle_series_outline_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
+    series = _series_context(ctx, payload)
+    premise = str(series["premise"])
+    count = int(series["requested_count"])
+
+    ollama = OllamaAdapter()
+    status = ollama.available()
+    if not status.available:
+        if payload.get("allow_fallback"):
+            summary = _accept_outline(
+                ctx, int(series["id"]), fallback_outline(premise, count),
+                "fallback_angles",
+            )
+            return {**summary, "method": "fallback_angles", "reason": status.detail}
+        raise PrereqMissing(f"ollama_unavailable: {status.detail}")
+
+    result = ollama.generate(
+        _series_prompt(premise, count),
+        system=_JSON_SYSTEM,
+        options={"num_ctx": 8192},
+    )
+    ideas = _parse_ideas(result["text"], count)
+    summary = _accept_outline(ctx, int(series["id"]), ideas, "local_ollama")
+    return {
+        **summary,
+        "method": "local_ollama",
+        "model": result["model"],
+        "thinking_stripped": result["thinking_stripped"],
+    }
+
+
+def handle_series_outline_fallback(payload: dict, job: dict, ctx: HandlerContext) -> dict:
+    series = _series_context(ctx, payload)
+    ideas = fallback_outline(str(series["premise"]), int(series["requested_count"]))
+    summary = _accept_outline(
+        ctx, int(series["id"]), ideas, "fallback_angles"
+    )
+    return {
+        **summary,
+        "method": "fallback_angles",
+        "note": "deterministic 20-angle outline - no model used",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +580,10 @@ def _render_tone(rate: int, seconds: float, freq: float = 220.0) -> bytes:
 JOB_HANDLERS: dict[str, Handler] = {
     "script_gen": handle_script_gen,
     "script_fallback": handle_script_fallback,
+    "storyboard_gen": handle_storyboard_gen,
+    "storyboard_fallback": handle_storyboard_fallback,
+    "series_outline_gen": handle_series_outline_gen,
+    "series_outline_fallback": handle_series_outline_fallback,
     "tts_render": handle_tts_render,
     "tts_fallback": handle_tts_fallback,
 }

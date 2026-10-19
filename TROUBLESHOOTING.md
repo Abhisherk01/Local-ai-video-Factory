@@ -26,6 +26,24 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 **Cause.** The backend was started with `python -m laf.server --no-worker` (debug flag), or the worker thread crashed at boot (check `backend.log` in the data dir).
 **Fix.** Restart the backend without `--no-worker`. Queued jobs survive restarts - that is the point of the durable queue - so nothing was lost.
 
+## Phase 4 — storyboard / series
+
+### Storyboard job fails with `model JSON invalid` or `model returned N shots, expected M`
+**Cause.** A 4 B model on CPU sometimes emits malformed JSON or miscounts items. These are retryable: the worker retries with backoff (3 attempts total).
+**Fix.** Usually nothing — attempt 2 or 3 lands. If a job still ends `failed`, re-run Storyboard; if it keeps failing, run it once in template mode (deterministic shot templates, labeled `fallback_split`) and retry the model path later. Repeated miscounts on a warm model can mean a context-window squeeze; `LAF_OLLAMA_TIMEOUT` does not help here (it is a timeout, not a quality knob) — the storyboard request already pins `num_ctx: 8192`.
+
+### Storyboard button does nothing / API says `episode has no script yet`
+**Cause.** Storyboarding slices the narration, so it needs a script first (400 by design — queueing a job that cannot run would just burn an attempt).
+**Fix.** Click **Script** first; when the episode reaches `scripted`, Storyboard unlocks.
+
+### Series outline finished but says `3 accepted, 17 skipped as duplicates`
+**Cause.** Working as intended: the duplicate detector (normalized token-set Jaccard, ADR-011) judged those candidates too similar to episodes already in the series or to each other, and first occurrence wins.
+**Fix.** None needed if the accepted set looks right. To get more variety, re-run the outline with a sharper premise (the model path proposes distinct angles), or delete near-duplicate episode drafts and re-run. A job that ends with **zero** accepted candidates fails with `non_retryable: all ... duplicates` — that is honest, not a bug: the series already covers every proposed angle.
+
+### New episode rows show a `series N` tag I did not create
+**Cause.** Episodes drafted by a series outline are linked to their series (`episodes.series_id`).
+**Fix.** Nothing — deleting the series keeps the episodes (the tag just disappears); deleting an episode never touches the series.
+
 ## Phase 2 — desktop shell / backend
 
 ### `cargo` / `rustup` is not recognized after installing Rust

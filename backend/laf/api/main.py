@@ -12,7 +12,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from laf import __version__
 from laf.api.middleware import TokenMiddleware
-from laf.api.routes import adapters, health, jobs, settings, system, episodes
+from laf.api.routes import (
+    adapters,
+    episodes,
+    health,
+    jobs,
+    series,
+    settings,
+    styles,
+    system,
+)
 from laf.api.state import AppState
 from laf.config import resolve_runtime
 from laf.db import connect, ensure_schema
@@ -112,6 +121,8 @@ def create_app(
     app.include_router(system.router)
     app.include_router(settings.router)
     app.include_router(episodes.router)
+    app.include_router(styles.router)
+    app.include_router(series.router)
     app.include_router(jobs.router)
     app.include_router(adapters.router)
     return app

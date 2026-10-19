@@ -7,10 +7,15 @@ two-endpoint integration, and no import-time network activity.
 Environment overrides:
 - LAF_OLLAMA_URL   (default http://127.0.0.1:11434)
 - LAF_OLLAMA_MODEL (default qwen3:4b - the Tier-3 pin from Phase 0)
+- LAF_OLLAMA_TIMEOUT (generate timeout seconds, default 600)
 
 qwen3 emits `<think>...</think>` reasoning blocks by default; narration
-consumers never want them, so `generate()` strips them and reports
-whether thinking was present in the result metadata (honesty rule).
+consumers never want them, so `generate()` requests thinking disabled at
+the API level (`"think": false`, supported for thinking-capable models)
+AND strips any residual block, reporting whether thinking was present in
+the result metadata (honesty rule). Reason: with thinking enabled and
+non-streaming HTTP, CPU-only machines timed out before a single script
+finished (phase-4 hotfix).
 """
 
 from __future__ import annotations
@@ -32,14 +37,18 @@ class OllamaAdapter:
         self,
         base_url: str | None = None,
         model: str | None = None,
-        generate_timeout_s: float = 180.0,
+        generate_timeout_s: float | None = None,
     ) -> None:
         self.base_url = (
             base_url
             or os.environ.get("LAF_OLLAMA_URL", "http://127.0.0.1:11434")
         ).rstrip("/")
         self.model = model or os.environ.get("LAF_OLLAMA_MODEL", "qwen3:4b")
-        self.generate_timeout_s = generate_timeout_s
+        # 600 s default: the timer must cover cold model load + full script
+        # generation on CPU-only machines (180 s timed out in the field).
+        self.generate_timeout_s = generate_timeout_s if generate_timeout_s is not None else float(
+            os.environ.get("LAF_OLLAMA_TIMEOUT", "600")
+        )
 
     # ------------------------------------------------------------------
     # availability
@@ -92,6 +101,10 @@ class OllamaAdapter:
             "model": model or self.model,
             "prompt": prompt,
             "stream": False,
+            # Narration never wants reasoning tokens; generating them (plus
+            # the non-streaming wait) timed out CPU-only machines in the
+            # field. Keep the post-hoc strip as belt-and-braces.
+            "think": False,
         }
         if system:
             body["system"] = system

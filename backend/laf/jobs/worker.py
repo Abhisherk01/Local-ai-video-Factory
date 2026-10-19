@@ -28,7 +28,13 @@ from typing import Callable
 
 from laf.db import connect
 from laf.jobs import queue
-from laf.jobs.handlers import JOB_HANDLERS, Handler, HandlerContext, PrereqMissing
+from laf.jobs.handlers import (
+    JOB_HANDLERS,
+    Handler,
+    HandlerContext,
+    NonRetryable,
+    PrereqMissing,
+)
 
 logger = logging.getLogger("laf.jobs.worker")
 
@@ -140,6 +146,14 @@ class Worker:
         except PrereqMissing as exc:
             queue.fail(conn, int(job["id"]), f"prereq_missing: {exc}", retry=False)
             logger.warning("job prereq missing", extra={"job_id": job["id"], "error": str(exc)})
+        except NonRetryable as exc:
+            queue.fail(
+                conn, int(job["id"]), f"non_retryable: {exc}", retry=False
+            )
+            logger.warning(
+                "job failed (non-retryable)",
+                extra={"job_id": job["id"], "error": str(exc)},
+            )
         except Exception as exc:  # noqa: BLE001 - handler errors become job failures
             queue.fail(conn, int(job["id"]), str(exc), retry=True)
             logger.warning("job failed", extra={"job_id": job["id"], "error": str(exc)})

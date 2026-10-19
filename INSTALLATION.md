@@ -85,9 +85,10 @@ stack has dependable wheels for 3.12, not for the system 3.14.
 pytest -q
 ```
 
-Expected: **29 passed** — repo integrity (7), SQLite connection (4),
+Expected: **108 passed** — repo integrity (7), SQLite connection (4),
 migrations incl. rollback (5), health (3), settings/token (5),
-system/prereq (5).
+system/prereq (5), plus the phase 3–4 pipeline suites (queue, handlers,
+adapters, dedupe, storyboard, series, API, worker e2e).
 
 ## Step 6 — Frontend dependencies
 
@@ -135,7 +136,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\probe-hardware.ps1   # read-o
 ## Where things stand after these steps
 
 - Desktop shell + backend + database + durable job queue running locally;
-  tests green (76 expected as of Phase 3).
+  tests green (108 expected as of Phase 4).
 - Disk gate for Phase 3: PASSED (owner confirmed 118.6 GB free 2026-10-19).
 - Optional, whenever you want model-backed generation: install Ollama +
   pull `qwen3:4b`, and drop a piper release + one voice into the models

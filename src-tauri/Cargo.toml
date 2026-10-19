@@ -1,6 +1,6 @@
 [package]
 name = "laf-shell"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local AI Video Factory desktop shell (Tauri 2)"
 authors = ["rajbh"]
 license = "MIT"
@@ -20,12 +20,15 @@ rand = "0.9"
 # Job Object kill-on-close: the backend must never outlive the shell
 # (Phase 3 orphan fix). windows-sys is already in the dependency tree
 # via Tauri, so this adds no new third-party crate.
+# Win32_System_Threading gates JOBOBJECT_EXTENDED_LIMIT_INFORMATION even
+# though it lives in the JobObjects module (owner-MSVC compile fix).
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+
 [profile.release]
 codegen-units = 1
 lto = true

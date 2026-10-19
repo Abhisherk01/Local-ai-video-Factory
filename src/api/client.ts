@@ -18,6 +18,9 @@ import type {
   PathValidation,
   PipelineJob,
   PrereqCheck,
+  SeriesInfo,
+  Storyboard,
+  StyleInfo,
   SystemPaths,
 } from "./types";
 
@@ -165,4 +168,35 @@ export const api = {
   jobStats: () => request<JobsStatsInfo>("/api/v1/jobs/stats"),
 
   adapters: () => request<AdaptersInfo>("/api/v1/adapters"),
+
+  // -- Phase 4: styles, storyboards, series --------------------------------
+
+  styles: () => request<{ styles: StyleInfo[] }>("/api/v1/styles"),
+
+  requestStoryboard: (
+    id: number,
+    body: { style_slug?: string; mode: string; allow_fallback?: boolean },
+  ) =>
+    request<{ job: PipelineJob; created: boolean }>(
+      `/api/v1/episodes/${id}/storyboard`,
+      { method: "POST", json: body },
+    ),
+
+  storyboard: (id: number) =>
+    request<{ storyboard: Storyboard | null }>(
+      `/api/v1/episodes/${id}/storyboard`,
+    ),
+
+  series: () => request<{ series: SeriesInfo[] }>("/api/v1/series"),
+
+  createSeries: (body: {
+    name: string;
+    premise: string;
+    count: number;
+    mode: string;
+  }) =>
+    request<{ series: SeriesInfo; job: PipelineJob; created: boolean }>(
+      "/api/v1/series",
+      { method: "POST", json: body },
+    ),
 };

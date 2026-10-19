@@ -29,10 +29,14 @@ def create_episode(
     title: str,
     topic: str,
     channel: str = "default",
+    series_id: int | None = None,
 ) -> dict[str, Any]:
     cur = conn.execute(
-        "INSERT INTO episodes (title, topic, channel) VALUES (?, ?, ?)",
-        (title, topic, channel),
+        """
+        INSERT INTO episodes (title, topic, channel, series_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        (title, topic, channel, int(series_id) if series_id is not None else None),
     )
     return get_episode(conn, int(cur.lastrowid))  # type: ignore[arg-type]
 

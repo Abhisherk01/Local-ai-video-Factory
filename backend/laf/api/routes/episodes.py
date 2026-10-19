@@ -1,4 +1,5 @@
-"""Episode routes: create, list, inspect, delete, enqueue script jobs."""
+"""Episode routes: create, list, inspect, delete, enqueue script and
+storyboard jobs."""
 
 from __future__ import annotations
 
@@ -8,6 +9,8 @@ from pydantic import BaseModel, Field
 from laf.api.state import AppState
 from laf.episodes import create_episode, delete_episode, get_episode, list_episodes
 from laf.jobs import queue
+from laf.styles import get_style
+from laf.storyboards import get_storyboard
 
 router = APIRouter(prefix="/api/v1/episodes")
 
@@ -99,3 +102,62 @@ def enqueue_script(episode_id: int, payload: ScriptRequest, request: Request) ->
         idempotency_key=payload.idempotency_key,
     )
     return {"job": job, "created": created}
+
+
+class StoryboardRequest(BaseModel):
+    style_slug: str | None = Field(default=None, max_length=40)
+    mode: str = Field(default="auto", pattern="^(auto|model|template)$")
+    allow_fallback: bool = True
+    idempotency_key: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/{episode_id}/storyboard", status_code=202)
+def enqueue_storyboard(
+    episode_id: int, payload: StoryboardRequest, request: Request
+) -> dict:
+    """Queue a storyboard job for a scripted episode.
+
+    The scene plan needs narration to slice, so the episode must carry
+    a script (400 otherwise - queueing a job that cannot run would just
+    burn an attempt). Style resolves at enqueue time for fast feedback
+    and again inside the handler (registry may change in between).
+    """
+    state: AppState = request.app.state.laf
+    episode = get_episode(state.conn, episode_id)
+    if episode is None:
+        raise HTTPException(status_code=404, detail="episode not found")
+    if not str(episode["script_text"] or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="episode has no script yet - run Script first",
+        )
+
+    style_slug = payload.style_slug
+    if style_slug is not None and get_style(state.conn, style_slug) is None:
+        raise HTTPException(
+            status_code=400, detail=f"unknown style slug: {style_slug}"
+        )
+
+    if payload.mode == "template":
+        job_type = "storyboard_fallback"
+    else:
+        job_type = "storyboard_gen"
+    job, created = queue.enqueue(
+        state.conn,
+        job_type,
+        payload={
+            "style_slug": style_slug,
+            "allow_fallback": payload.allow_fallback,
+        },
+        episode_id=episode_id,
+        idempotency_key=payload.idempotency_key,
+    )
+    return {"job": job, "created": created}
+
+
+@router.get("/{episode_id}/storyboard")
+def fetch_storyboard(episode_id: int, request: Request) -> dict:
+    state: AppState = request.app.state.laf
+    if get_episode(state.conn, episode_id) is None:
+        raise HTTPException(status_code=404, detail="episode not found")
+    return {"storyboard": get_storyboard(state.conn, episode_id)}

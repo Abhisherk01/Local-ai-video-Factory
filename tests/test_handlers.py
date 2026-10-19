@@ -42,9 +42,16 @@ def _job(ctx, job_type="script_gen", episode_id=None):
     return queue.claim_next(ctx.conn, worker_id="w")
 
 
-def test_known_types_are_the_four_phase3_handlers() -> None:
+def test_known_types_cover_phases_3_and_4() -> None:
     assert known_types() == [
-        "script_fallback", "script_gen", "tts_fallback", "tts_render",
+        "script_fallback",
+        "script_gen",
+        "series_outline_fallback",
+        "series_outline_gen",
+        "storyboard_fallback",
+        "storyboard_gen",
+        "tts_fallback",
+        "tts_render",
     ]
 
 
@@ -116,6 +123,22 @@ def test_script_gen_with_ollama_strips_thinking(env, fake_ollama, monkeypatch) -
     stored = get_episode(env.conn, ep["id"])
     assert "internal reasoning" not in stored["script_text"]
     assert "Hook: line one." in stored["script_text"]
+
+
+def test_script_gen_into_deleted_episode_is_non_retryable(
+    env, fake_ollama, monkeypatch
+) -> None:
+    """Phase-3 field lesson: a vanished store target must not burn the
+    remaining attempts (and another full generation) on a sure failure."""
+    from laf.jobs.handlers import NonRetryable
+    from laf.episodes import delete_episode
+
+    monkeypatch.setenv("LAF_OLLAMA_URL", fake_ollama)
+    ep = create_episode(env.conn, title="T", topic="x")
+    job = _job(env, "script_gen", episode_id=ep["id"])
+    delete_episode(env.conn, ep["id"])  # the mid-job disappearance
+    with pytest.raises(NonRetryable, match="disappeared mid-job"):
+        handle_script_gen({"topic": "x"}, job, env)
 
 
 def test_tts_fallback_writes_a_real_playable_wav(env) -> None:

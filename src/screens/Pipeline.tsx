@@ -7,7 +7,10 @@ import type {
   JobStats,
   JobsStatsInfo,
   PipelineJob,
+  SeriesInfo,
+  StyleInfo,
 } from "../api/types";
+import StoryboardPanel from "../components/StoryboardPanel";
 import StatusChip from "../components/StatusChip";
 import type { StatusChipProps } from "../components/StatusChip";
 import { btnGhost, btnPrimary, card, inputCls } from "../components/ui";
@@ -18,6 +21,7 @@ function statusTone(status: string): StatusChipProps["tone"] {
   switch (status) {
     case "succeeded":
     case "scripted":
+    case "storyboarded":
     case "published":
       return "ok";
     case "running":
@@ -81,6 +85,14 @@ export default function Pipeline({ version }: PipelineProps) {
   const [stats, setStats] = useState<JobStats | null>(null);
   const [workerRunning, setWorkerRunning] = useState<boolean | null>(null);
   const [adapters, setAdapters] = useState<AdaptersInfo | null>(null);
+  const [styles, setStyles] = useState<StyleInfo[]>([]);
+  const [styleChoice, setStyleChoice] = useState("dark_cinematic");
+  const [series, setSeries] = useState<SeriesInfo[]>([]);
+  const [seriesName, setSeriesName] = useState("");
+  const [seriesPremise, setSeriesPremise] = useState("");
+  const [seriesCount, setSeriesCount] = useState(20);
+  const [planOpenFor, setPlanOpenFor] = useState<number | null>(null);
+  const [planKey, setPlanKey] = useState(0);
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState("");
   const [busy, setBusy] = useState(false);
@@ -89,16 +101,20 @@ export default function Pipeline({ version }: PipelineProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const [ep, js, ad] = await Promise.all([
+      const [ep, js, ad, st, se] = await Promise.all([
         api.episodes(),
         api.jobs(),
         api.adapters(),
+        api.styles(),
+        api.series(),
       ]);
       if (!aliveRef.current) return;
       setEpisodes(ep.episodes);
       setJobs(js.jobs);
       setAdapters(ad);
       setWorkerRunning(ad.worker.running);
+      setStyles(st.styles);
+      setSeries(se.series);
       const statsBody: JobsStatsInfo = await api.jobStats();
       if (aliveRef.current) setStats(statsBody.stats);
       setError(null);
@@ -138,6 +154,43 @@ export default function Pipeline({ version }: PipelineProps) {
     setBusy(true);
     try {
       await api.requestScript(ep.id, { mode });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function storyboardEpisode(ep: Episode) {
+    setBusy(true);
+    try {
+      await api.requestStoryboard(ep.id, {
+        style_slug: styleChoice,
+        mode: "auto",
+      });
+      setPlanOpenFor(ep.id);
+      setPlanKey((k) => k + 1);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSeriesOutline() {
+    if (!seriesName.trim() || !seriesPremise.trim() || busy) return;
+    setBusy(true);
+    try {
+      await api.createSeries({
+        name: seriesName.trim(),
+        premise: seriesPremise.trim(),
+        count: seriesCount,
+        mode: "auto",
+      });
+      setSeriesName("");
+      setSeriesPremise("");
       await refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -255,6 +308,7 @@ export default function Pipeline({ version }: PipelineProps) {
               const scriptJob = jobs.find(
                 (j) => j.episode_id === ep.id && j.type.startsWith("script"),
               );
+              const planReady = ep.status === "storyboarded";
               return (
                 <li key={ep.id} className="flex flex-col gap-1 py-3">
                   <div className="flex items-center justify-between gap-3">
@@ -272,20 +326,62 @@ export default function Pipeline({ version }: PipelineProps) {
                             {ep.script_method}
                           </span>
                         )}
+                        {ep.series_id != null && (
+                          <span className="font-mono text-caption text-ink-mute">
+                            series {ep.series_id}
+                          </span>
+                        )}
                       </div>
                       <p className="mt-0.5 truncate text-caption text-ink-mute">
                         {ep.topic}
                       </p>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                      <select
+                        className="rounded-md border border-line-subtle bg-base px-2 py-1.5 font-mono text-caption text-ink-dim"
+                        value={styleChoice}
+                        title="Visual style applied to every scene prompt"
+                        onChange={(e) => setStyleChoice(e.target.value)}
+                      >
+                        {styles.length === 0 && (
+                          <option value="dark_cinematic">dark_cinematic</option>
+                        )}
+                        {styles.map((s) => (
+                          <option key={s.slug} value={s.slug}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
                       <button
                         className={btnGhost}
-                        disabled={busy || ep.status === "scripted"}
+                        disabled={busy || ep.status !== "draft"}
                         onClick={() => void scriptEpisode(ep, "auto")}
                         title="Queue a script job (Ollama when installed, template fallback otherwise)"
                       >
                         Script
                       </button>
+                      <button
+                        className={btnGhost}
+                        disabled={
+                          busy ||
+                          (ep.status !== "scripted" && ep.status !== "storyboarded")
+                        }
+                        onClick={() => void storyboardEpisode(ep)}
+                        title="Split the script into scenes with per-scene visual prompts"
+                      >
+                        Storyboard
+                      </button>
+                      {planReady && (
+                        <button
+                          className={btnGhost}
+                          onClick={() =>
+                            setPlanOpenFor(planOpenFor === ep.id ? null : ep.id)
+                          }
+                          title="Show or hide the scene plan"
+                        >
+                          {planOpenFor === ep.id ? "Hide plan" : "Plan"}
+                        </button>
+                      )}
                       <button
                         className={btnGhost}
                         disabled={busy}
@@ -302,6 +398,120 @@ export default function Pipeline({ version }: PipelineProps) {
                       {scriptJob.error ? ` - ${scriptJob.error}` : ""}
                     </p>
                   )}
+                  {planOpenFor === ep.id && (
+                    <StoryboardPanel episodeId={ep.id} refreshKey={planKey} />
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <section className={`${card} mt-4`}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-section text-ink">Series</h2>
+          <span className="font-mono text-caption text-ink-mute">
+            {series.length}
+          </span>
+        </div>
+        <p className="mt-1 text-caption text-ink-mute">
+          One premise becomes a season of episode drafts. Near-duplicate
+          ideas are skipped and reported honestly.
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          <input
+            className={inputCls}
+            placeholder="Series name (e.g. Sourdough basics)"
+            value={seriesName}
+            maxLength={200}
+            onChange={(e) => setSeriesName(e.target.value)}
+          />
+          <textarea
+            className={`${inputCls} h-16 py-2`}
+            placeholder="Premise the episodes should explore"
+            value={seriesPremise}
+            maxLength={4000}
+            onChange={(e) => setSeriesPremise(e.target.value)}
+          />
+          <div className="flex items-center gap-2">
+            <label className="text-caption text-ink-mute">episodes</label>
+            <input
+              type="number"
+              min={3}
+              max={30}
+              className={`${inputCls} w-24`}
+              value={seriesCount}
+              onChange={(e) => setSeriesCount(Number(e.target.value) || 20)}
+            />
+            <button
+              className={btnPrimary}
+              disabled={busy || !seriesName.trim() || !seriesPremise.trim()}
+              onClick={() => void createSeriesOutline()}
+            >
+              Generate outline
+            </button>
+          </div>
+        </div>
+        {series.length === 0 ? (
+          <p className="mt-3 text-body2 text-ink-dim">
+            No series yet. The outline works with built-in angle templates
+            even before any model is installed.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-line-subtle">
+            {series.map((s) => {
+              const outlineJob = jobs.find(
+                (j) =>
+                  j.type.startsWith("series") &&
+                  Number(j.payload?.series_id) === s.id,
+              );
+              return (
+                <li key={s.id} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-body2 text-ink">
+                        {s.name}
+                      </span>
+                      {s.method && (
+                        <span
+                          className={`font-mono text-caption ${
+                            s.method === "local_ollama"
+                              ? "text-success"
+                              : "text-warning"
+                          }`}
+                        >
+                          {s.method}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 truncate text-caption text-ink-mute">
+                      {s.premise}
+                    </p>
+                    {outlineJob && outlineJob.status !== "succeeded" && (
+                      <p className="font-mono text-caption text-ink-mute">
+                        outline job #{outlineJob.id} {outlineJob.status}
+                        {outlineJob.error ? ` - ${outlineJob.error}` : ""}
+                      </p>
+                    )}
+                    {outlineJob && outlineJob.status === "succeeded" && (
+                      <p className="font-mono text-caption text-ink-mute">
+                        outline done:
+                        {outlineJob.result &&
+                        typeof outlineJob.result.accepted === "number"
+                          ? ` ${outlineJob.result.accepted} accepted`
+                          : ""}
+                        {outlineJob.result &&
+                          Array.isArray(outlineJob.result.skipped) &&
+                          outlineJob.result.skipped.length > 0
+                            ? `, ${outlineJob.result.skipped.length} skipped as duplicates`
+                            : ""}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 font-mono text-caption text-ink-mute">
+                    {s.episode_count ?? 0}/{s.requested_count} episodes
+                  </span>
                 </li>
               );
             })}

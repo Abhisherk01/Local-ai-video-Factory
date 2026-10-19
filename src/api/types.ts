@@ -56,6 +56,7 @@ export interface Episode {
   status: EpisodeStatus;
   script_text: string | null;
   script_method: string | null;
+  series_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -106,4 +107,47 @@ export interface AdapterProbe {
 export interface AdaptersInfo {
   adapters: Record<string, AdapterProbe>;
   worker: { running: boolean; worker_id: string | null };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: styles, storyboards, series
+// ---------------------------------------------------------------------------
+
+export interface StyleInfo {
+  id: number;
+  slug: string;
+  name: string;
+  prompt_prefix: string;
+  prompt_suffix: string;
+  is_builtin: boolean;
+}
+
+export interface StoryboardScene {
+  idx: number;
+  narration: string;
+  visual_prompt: string;
+  duration_s: number;
+}
+
+export interface Storyboard {
+  id: number;
+  episode_id: number;
+  style_slug: string;
+  method: string | null;
+  scene_count: number;
+  total_duration_s: number;
+  created_at: string;
+  updated_at: string;
+  scenes: StoryboardScene[];
+}
+
+export interface SeriesInfo {
+  id: number;
+  name: string;
+  premise: string;
+  requested_count: number;
+  method: string | null;
+  episode_count?: number;
+  created_at: string;
+  updated_at: string;
 }
