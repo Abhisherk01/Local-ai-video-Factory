@@ -20,4 +20,6 @@ requires-python = ">=3.12,<3.13"
 testpaths = ["tests"]
 addopts = "-q"
 # Backend package lives in backend/; make `import laf` work from repo-root tests.
-pythonpath = ["backend"]
+# "." puts the repo root on sys.path too, so `from tests.conftest import ...`
+# resolves under a bare `pytest` run (python -m pytest masked this during Phase 2).
+pythonpath = ["backend", "."]
