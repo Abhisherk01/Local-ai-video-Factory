@@ -1,6 +1,6 @@
 import { chip } from "./ui";
 
-interface StatusChipProps {
+export interface StatusChipProps {
   tone: "ok" | "warn" | "error" | "info";
   label: string;
 }

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { api } from "./api/client";
 import type { BackendStatus } from "./api/types";
 import StatusChip from "./components/StatusChip";
+import { btnGhost, btnPrimary } from "./components/ui";
 import Home from "./screens/Home";
+import Pipeline from "./screens/Pipeline";
 import Wizard from "./screens/Wizard";
 
 /**
@@ -14,6 +16,7 @@ import Wizard from "./screens/Wizard";
 export default function App() {
   const [backend, setBackend] = useState<BackendStatus>({ state: "starting" });
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [screen, setScreen] = useState<"home" | "pipeline">("home");
 
   useEffect(() => {
     let cancelled = false;
@@ -110,7 +113,27 @@ export default function App() {
         )}
 
         {backend.state === "ready" && onboarded === true && (
-          <Home version={backend.version} />
+          <>
+            <nav className="flex shrink-0 items-center gap-2 border-b border-line-subtle bg-surface px-4 py-2">
+              <button
+                className={screen === "home" ? btnPrimary : btnGhost}
+                onClick={() => setScreen("home")}
+              >
+                Studio
+              </button>
+              <button
+                className={screen === "pipeline" ? btnPrimary : btnGhost}
+                onClick={() => setScreen("pipeline")}
+              >
+                Pipeline
+              </button>
+            </nav>
+            {screen === "home" ? (
+              <Home version={backend.version} />
+            ) : (
+              <Pipeline version={backend.version} />
+            )}
+          </>
         )}
       </main>
     </div>

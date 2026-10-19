@@ -37,7 +37,7 @@ export default function Home({ version }: HomeProps) {
             <h1 className="text-display text-ink">Studio</h1>
             <p className="mt-1 text-body2 text-ink-dim">
               Shell, backend, and database are online. The content pipeline
-              arrives in Phase 3.
+              lives in the Pipeline tab.
             </p>
           </div>
           <StatusChip tone="ok" label={`backend v${version}`} />
@@ -48,19 +48,14 @@ export default function Home({ version }: HomeProps) {
         <h2 className="text-section text-ink">What ships next</h2>
         <ol className="mt-3 space-y-2 text-body2 text-ink-dim">
           <li>
-            <span className="font-mono text-caption text-accent">Phase 3</span>{" "}
-            - durable job queue (pending/claimed/running/done, heartbeats,
-            boot recovery) and the episode data model
-          </li>
-          <li>
             <span className="font-mono text-caption text-accent">Phase 4</span>{" "}
-            - local LLM scripting with Ollama (topic to narration-ready
-            script)
+            - install Ollama + a voice model and verify the model-backed
+            paths end-to-end (queue and fallback paths already ship)
           </li>
           <li>
             <span className="font-mono text-caption text-accent">Phase 5</span>{" "}
-            - visual generation engines (adapter architecture, honest method
-            labels)
+            - visual generation engines behind the same adapter registry
+            (honest method labels, GPU concurrency 1)
           </li>
         </ol>
       </section>

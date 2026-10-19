@@ -11,8 +11,12 @@
  */
 
 import type {
+  AdaptersInfo,
+  Episode,
   HealthInfo,
+  JobsStatsInfo,
   PathValidation,
+  PipelineJob,
   PrereqCheck,
   SystemPaths,
 } from "./types";
@@ -125,4 +129,40 @@ export const api = {
       method: "PUT",
       json: { values },
     }),
+
+  // -- Phase 3: pipeline ---------------------------------------------------
+
+  episodes: (status?: string) =>
+    request<{ episodes: Episode[] }>(
+      `/api/v1/episodes${status ? `?status=${status}` : ""}`,
+    ),
+
+  createEpisode: (title: string, topic: string) =>
+    request<{ episode: Episode }>("/api/v1/episodes", {
+      method: "POST",
+      json: { title, topic },
+    }),
+
+  deleteEpisode: (id: number) =>
+    request<{ deleted: boolean }>(`/api/v1/episodes/${id}`, {
+      method: "DELETE",
+    }),
+
+  requestScript: (id: number, body: { mode: string; allow_fallback?: boolean }) =>
+    request<{ job: PipelineJob; created: boolean }>(
+      `/api/v1/episodes/${id}/script`,
+      { method: "POST", json: body },
+    ),
+
+  jobs: (limit = 50) =>
+    request<{ jobs: PipelineJob[] }>(`/api/v1/jobs?limit=${limit}`),
+
+  cancelJob: (id: number) =>
+    request<{ job: PipelineJob }>(`/api/v1/jobs/${id}/cancel`, {
+      method: "POST",
+    }),
+
+  jobStats: () => request<JobsStatsInfo>("/api/v1/jobs/stats"),
+
+  adapters: () => request<AdaptersInfo>("/api/v1/adapters"),
 };
