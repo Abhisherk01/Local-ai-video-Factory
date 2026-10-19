@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.0 - Phase 3: content pipeline foundations
+
+### Added
+- Durable SQLite job queue (ADR-009): atomic claims, GPU concurrency 1,
+  exponential-backoff retries, heartbeat-based stale reclaim on boot,
+  idempotent enqueue, queued-job cancellation.
+- Episode data model (migration 0002): episodes + jobs tables.
+- Background worker thread (own DB connection, heartbeat loop) owned by
+  the FastAPI lifespan; `python -m laf.server --no-worker` debug flag.
+- Generation adapters (ADR-010): Ollama LLM (stdlib HTTP, <think> strip),
+  Piper TTS CLI (exe/voice resolution), Kokoro availability probe
+  (synthesis wiring lands in Phase 5). Honest method labels on every
+  result: local_ollama / local_piper / fallback_template / fallback_tone.
+- Handlers: script_gen, script_fallback, tts_render, tts_fallback -
+  the model-free fallback paths make the pipeline provable before any
+  model is installed.
+- API: /api/v1/episodes (+POST {id}/script), /api/v1/jobs (+/stats,
+  +/{id}/cancel), /api/v1/adapters availability probes.
+- Pipeline UI screen: episode CRUD, script enqueue, live job queue with
+  stats, cancel action, adapter status chips; Studio/Pipeline nav.
+- Shell: Windows Job Object kill-on-close for the backend child - the
+  Ctrl+C orphaned-backend class of bugs is structurally fixed.
+- Tests: 29 → 76 (queue mechanics, handler contracts incl. a fake
+  Ollama HTTP server, cross-platform Piper stub, API coverage, worker
+  end-to-end + crash-recovery reclaim).
+
+### Notes
+- ADR-009 documents the implemented state names as a deliberate
+  simplification of ADR-005's sketch (same guarantees, fewer states).
+- Model-backed script/TTS verification on owner hardware requires
+  installing Ollama and Piper (optional section in INSTALLATION.md).
+
+## 0.2.0 - Phase 2: desktop shell + backend + health checks
+
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versioning follows [SemVer](https://semver.org/).
 

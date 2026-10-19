@@ -10,7 +10,8 @@ Designed to operate up to **15 YouTube and Instagram accounts** across different
 |---|---|---|
 | 0 | Hardware assessment, licensing, cost boundaries | Done — approved 2026-10-19 |
 | 1 | Repository foundation, architecture decisions, design system, Git workflow | Done — verified on owner hardware 2026-10-19 |
-| 2 | Desktop shell, first-run wizard, backend, database, health checks | Done — this release (owner verification pending) |
+| 2 | Desktop shell, first-run wizard, backend, database, health checks | Done — verified on owner hardware 2026-10-19 |
+| 3 | Episode model, durable job queue, Ollama/Piper adapters, pipeline UI | Built — this release (fallback paths test-verified; model-backed paths await installs) |
 | 3–14 | Models, series engine, rendering, clipping, channels, publishing, analytics, packaging | Planned — see [ROADMAP.md](ROADMAP.md) |
 
 Build machine profile: **Tier 3** (RTX 2050 4 GB VRAM, 16 GB RAM, i5-12450H) — full analysis in [docs/PHASE0-HARDWARE-ASSESSMENT.md](docs/PHASE0-HARDWARE-ASSESSMENT.md).
@@ -72,6 +73,22 @@ npm run dev                     # terminal 2: UI at http://localhost:5173
 
 Full setup instructions: [INSTALLATION.md](INSTALLATION.md). Problems: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
+## Optional Phase 3 model installs (Windows PowerShell)
+
+```powershell
+# LLM scripting (about 2.6 GB): install Ollama, then pull the Tier-3 model
+winget install Ollama.Ollama
+ollama pull qwen3:4b
+
+# TTS (about 100 MB): unzip a piper release into <data_dir>\models\piper
+#   so piper.exe sits at models\piper\piper.exe, and a voice .onnx at
+#   models\piper\voices\en_US-amy-medium.onnx (any en_US voice works).
+# Overrides if you prefer other locations: LAF_PIPER, LAF_PIPER_VOICE.
+```
+
+The app's Pipeline tab shows live adapter chips; `/api/v1/adapters`
+reports exactly what it detected and what to fix.
+
 ## Documentation index
 
 | Doc | Contents |
@@ -94,12 +111,15 @@ Full setup instructions: [INSTALLATION.md](INSTALLATION.md). Problems: [TROUBLES
 3. No secrets, model weights, generated media, or account data ever enter Git.
 4. Every non-free or non-local capability is labeled, off by default, and honest about its limits.
 
-## Known limitations (Phase 2, stated honestly)
+## Known limitations (Phase 3, stated honestly)
 
 - The desktop app runs from the development layout (`npm run tauri dev`); a packaged installer arrives in Phase 13.
 - The shell resolves Python from the repo venv, `py -3.12`, or `LAF_PYTHON` — a bundled runtime comes with packaging.
 - Migrations are forward-only; destructive-change down-migrations are deferred until the schema stabilizes.
 - The wizard reports prerequisites; it never installs anything by itself.
+- Phase 3 ships the script + TTS-audio steps of the pipeline; model-backed script generation needs Ollama installed (`LAF_OLLAMA_URL`/`LAF_OLLAMA_MODEL` override defaults) and real speech needs Piper (`LAF_PIPER`/`LAF_PIPER_VOICE`). Without them the honest fallback paths run: template scripts and a labeled placeholder tone — never passed off as AI output.
+- Kokoro TTS is probe-only in this release; its synthesis wiring lands in Phase 5 (ADR-010).
+- Job cancellation applies to queued jobs; in-handler cooperative cancellation lands with queue hardening (roadmap row 8).
 
 ## License
 

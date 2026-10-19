@@ -1,6 +1,6 @@
 [project]
 name = "local-ai-video-factory"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local-first Windows desktop factory for scripted, narrated, captioned short-form video across up to 15 YouTube/Instagram channels, with zero paid generation APIs."
 readme = "README.md"
 license = { text = "MIT" }

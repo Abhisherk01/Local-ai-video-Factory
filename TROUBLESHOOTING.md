@@ -2,6 +2,30 @@
 
 Known issues and fixes, newest phase first. Each entry: symptom → cause → fix. This file grows with every phase; when a fix is found on your machine, it belongs here.
 
+## Phase 3 — pipeline / job queue / adapters
+
+### Two `laf.server` python processes show in Task Manager
+**Symptom.** `Get-CimInstance Win32_Process` finds two PIDs matching `*laf.server*` while the app runs.
+**Cause.** The backend is spawned with `CREATE_NO_WINDOW` (detached hidden console). Pressing Ctrl+C on the dev terminal kills `laf-shell.exe` but never reaches the backend; `kill_backend` only runs on the graceful exit path. Each hard-killed run leaked one orphan. **Fixed in 0.3.0**: the backend child is assigned to a Windows Job Object with kill-on-close, so it dies with the shell on any exit path. Orphans from *pre-fix* runs still need one manual cleanup:
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -like '*laf.server*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+**Habit.** Close the app window with the X button *before* Ctrl+C-ing the terminal.
+
+### Pipeline shows "ollama off" and script jobs fail with `prereq_missing: ollama_unavailable`
+**Cause.** No Ollama daemon is listening on `127.0.0.1:11434` (not installed, not running, or a non-default port).
+**Fix.** `winget install Ollama.Ollama`, then `ollama pull qwen3:4b` (about 2.6 GB). If it runs on another port or you want a different model: `LAF_OLLAMA_URL` / `LAF_OLLAMA_MODEL` environment variables. The `/api/v1/adapters` chips update on the next refresh. Until then, script jobs run the labeled template fallback (`fallback_template`).
+
+### Script jobs fail with `prereq_missing: piper_unavailable` or "no voice model"
+**Cause.** Piper is resolved as: `LAF_PIPER` env var → `<models_dir>\piper\piper.exe` → `piper` on PATH; voices come from `LAF_PIPER_VOICE` → first `*.onnx` in `<models_dir>\piper\voices`.
+**Fix.** Unzip a piper release into the models dir and drop one `.onnx` voice next to it (README "Optional Phase 3 model installs"). Without piper, TTS jobs run the honestly-labeled `fallback_tone` placeholder instead of pretending.
+
+### Jobs are stuck in `queued` and the worker chip says "worker stopped"
+**Cause.** The backend was started with `python -m laf.server --no-worker` (debug flag), or the worker thread crashed at boot (check `backend.log` in the data dir).
+**Fix.** Restart the backend without `--no-worker`. Queued jobs survive restarts - that is the point of the durable queue - so nothing was lost.
+
 ## Phase 2 — desktop shell / backend
 
 ### `cargo` / `rustup` is not recognized after installing Rust

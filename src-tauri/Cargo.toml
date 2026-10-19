@@ -1,6 +1,6 @@
 [package]
 name = "laf-shell"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local AI Video Factory desktop shell (Tauri 2)"
 authors = ["rajbh"]
 license = "MIT"

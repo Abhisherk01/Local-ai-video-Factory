@@ -134,9 +134,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\probe-hardware.ps1   # read-o
 
 ## Where things stand after these steps
 
-- Desktop shell + backend + database running locally; tests green.
-- Before Phase 3 begins: complete the disk cleanup to reach ≥ 60 GB free
-  (commands in `docs/PHASE0-HARDWARE-ASSESSMENT.md` §6).
+- Desktop shell + backend + database + durable job queue running locally;
+  tests green (76 expected as of Phase 3).
+- Disk gate for Phase 3: PASSED (owner confirmed 118.6 GB free 2026-10-19).
+- Optional, whenever you want model-backed generation: install Ollama +
+  pull `qwen3:4b`, and drop a piper release + one voice into the models
+  dir (see README "Optional Phase 3 model installs"). The Pipeline tab
+  shows exactly what it detected - and the template/tone fallback paths
+  work before any of that is installed.
 
 ## Next phases will add
 
