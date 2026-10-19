@@ -9,23 +9,27 @@ import pytest
 from laf.db import MigrationError, connect, current_version, ensure_schema
 
 
-def test_initial_migration_applies_and_is_idempotent(tmp_path: Path) -> None:
+def test_all_migrations_apply_and_are_idempotent(tmp_path: Path) -> None:
     conn = connect(tmp_path / "laf.db")
     try:
         applied_first = ensure_schema(conn)
-        assert applied_first == [1]
-        assert current_version(conn) == 1
+        assert applied_first and applied_first == sorted(applied_first)
+        assert applied_first[0] == 1
+        version = current_version(conn)
+        assert applied_first[-1] == version
 
         # Second run must be a no-op.
         applied_second = ensure_schema(conn)
         assert applied_second == []
-        assert current_version(conn) == 1
+        assert current_version(conn) == version
 
         names = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert {"schema_migrations", "app_settings", "schema_info"} <= names
+        # Phase 3 content pipeline tables (0002_episodes_jobs).
+        assert {"episodes", "jobs"} <= names
     finally:
         conn.close()
 
@@ -70,9 +74,11 @@ def test_failed_migration_rolls_back_fully(tmp_path: Path) -> None:
     conn2 = connect(tmp_path / "laf.db")
     try:
         ensure_schema(conn2)  # baseline applied
+        version_before = current_version(conn2)
         fake_dir = tmp_path / "fake_migrations"
         fake_dir.mkdir()
-        (fake_dir / "0002_bad.sql").write_text(
+        bad_version = version_before + 1
+        (fake_dir / f"{bad_version:04d}_bad.sql").write_text(
             "CREATE TABLE should_exist (id INTEGER);\nTHIS IS NOT VALID SQL;\n",
             encoding="utf-8",
         )
@@ -80,7 +86,7 @@ def test_failed_migration_rolls_back_fully(tmp_path: Path) -> None:
         original = mig.migrations_dir
         mig.migrations_dir = lambda: fake_dir  # type: ignore[assignment]
         try:
-            with pytest.raises(MigrationError, match="0002"):
+            with pytest.raises(MigrationError, match=f"{bad_version:04d}"):
                 ensure_schema(conn2)
         finally:
             mig.migrations_dir = original  # type: ignore[assignment]
@@ -91,7 +97,7 @@ def test_failed_migration_rolls_back_fully(tmp_path: Path) -> None:
             for row in conn2.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert "should_exist" not in tables
-        assert current_version(conn2) == 1
+        assert current_version(conn2) == version_before
     finally:
         conn2.close()
 

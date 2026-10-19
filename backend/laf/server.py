@@ -43,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--models-dir", default=None)
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--no-worker",
+        action="store_true",
+        help="serve the API without the background job worker (debugging)",
+    )
     args = parser.parse_args(argv)
 
     env_token = os.environ.get("LAF_TOKEN")
@@ -57,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         data_dir=runtime.data_dir,
         models_dir=runtime.models_dir,
         token=token,
+        worker_enabled=not args.no_worker,
     )
 
     handshake: dict[str, object] = {

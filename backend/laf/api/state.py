@@ -5,8 +5,12 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from laf.config import RuntimePaths
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, runtime only
+    from laf.jobs.worker import Worker
 
 
 @dataclass
@@ -18,6 +22,7 @@ class AppState:
     token: str | None
     started_at: float = field(default_factory=time.time)
     applied_migrations: list[int] = field(default_factory=list)
+    worker: "Worker | None" = None
 
     # -- app_settings helpers ------------------------------------------------
 
