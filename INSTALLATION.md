@@ -36,7 +36,7 @@ git log --oneline
 git tag
 ```
 
-Expected: 14 commits ending in the Phase 2 docs commit, plus tags
+Expected: **16 commits** ending in `chore: bump project version to 0.2.0`, plus tags
 `v0.1.0-phase1` and `v0.2.0-phase2`. The exact commit list is in the
 delivery notes for this phase.
 
