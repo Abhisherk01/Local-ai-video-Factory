@@ -19,3 +19,5 @@ requires-python = ">=3.12,<3.13"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Backend package lives in backend/; make `import laf` work from repo-root tests.
+pythonpath = ["backend"]

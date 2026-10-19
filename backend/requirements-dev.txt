@@ -1,0 +1,5 @@
+# Local AI Video Factory - backend development / test dependencies
+# Install inside the repo venv:  pip install -r backend/requirements-dev.txt
+-r requirements.txt
+pytest>=8,<10
+httpx>=0.27,<1.0
