@@ -2,6 +2,52 @@
 
 Known issues and fixes, newest phase first. Each entry: symptom → cause → fix. This file grows with every phase; when a fix is found on your machine, it belongs here.
 
+## Phase 2 — desktop shell / backend
+
+### `cargo` / `rustup` is not recognized after installing Rust
+**Cause.** PATH changes only reach **new** processes — and new tabs in an already-open Windows Terminal inherit the old PATH.
+**Fix.** Close *every* terminal window and open a brand-new one. To verify without a new window:
+```powershell
+& "$env:USERPROFILE\.cargo\bin\cargo.exe" --version
+```
+If that works, the install is fine — only your shell is stale.
+
+### `cargo --version` works but building fails with a linker error (`link.exe not found`)
+**Cause.** The MSVC C++ toolset is missing (Rust on Windows links with it).
+**Fix.** Install Visual Studio 2022 Build Tools with the "Desktop development with C++" workload (`winget install --id Microsoft.VisualStudio.2022.BuildTools -e`), or point the setup script at an existing Visual Studio via vswhere detection: re-run `scripts/setup-windows.ps1 -Check` and read the MSVC row.
+
+### The app window opens but shows "Backend failed to start"
+**Diagnosis.** Read the per-session log first: `%LOCALAPPDATA%\com.rajbh.localaivideofactory\backend.log` (or the data dir you configured).
+**Common causes.**
+- Python 3.12 missing → `py -3.12 -V` must print a version; else `winget install --id Python.Python.3.12 -e`.
+- Backend dependencies missing → inside the activated venv: `pip install -r backend/requirements-dev.txt`.
+- Custom interpreter needed → set the `LAF_PYTHON` environment variable to a Python 3.12 `python.exe` before launching.
+
+### "the backend did not become healthy within 30 seconds"
+**Cause.** The backend process is alive but `/health` never answered — usually an import error inside `laf` (bad venv) or a blocked loopback port.
+**Fix.** Check `backend.log` in the data dir. Test the backend manually:
+```powershell
+.\scripts\run-backend-dev.ps1
+# in a second terminal:
+curl.exe http://127.0.0.1:8756/health
+```
+
+### `npm run tauri dev` fails on the first compile
+**Cause.** The first Rust build downloads and compiles ~450 crates; flaky networks or antivirus interference can interrupt it.
+**Fix.** Just re-run `npm run tauri dev` (cargo resumes). Exclude the project folder and `%LOCALAPPDATA%\cargo` from real-time scanning if it recurs.
+
+### `npm run dev` shows "Starting local backend..." forever
+**Cause.** Browser mode expects the backend from `scripts/run-backend-dev.ps1` (Vite proxies `/laf-api` to port 8756). Without it, every request fails.
+**Fix.** Start the backend first, or use the full desktop flow (`npm run tauri dev`) which spawns its own backend.
+
+### Stale `runtime.json` in the data dir after a crash
+**Cause.** The handshake file is deleted on clean shutdown only.
+**Fix.** Harmless — ignore or delete it. The desktop shell never reads it (it passes its own port/token to the backend); it exists for standalone dev tooling.
+
+### Node warns about engines (v25 "Current" line)
+**Cause.** The build machine runs Node 25.x (non-LTS). Vite 7 supports it; some packages warn.
+**Fix.** Informational only. If a package ever hard-fails its engines check, install LTS 22 alongside (`winget install --id OpenJS.NodeJS.LTS -e`) — both can coexist.
+
 ## Phase 1 — repository / environment
 
 ### `running scripts is disabled on this system`

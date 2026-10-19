@@ -3,6 +3,27 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/); versioning follows [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-10-19
+
+### Added
+- Tauri 2 desktop shell (`src-tauri/`): spawns the Python backend as a managed child process on a random 127.0.0.1 port, generates a per-session token (passed via `LAF_TOKEN`, never logged), polls `/health` until ready, exposes `get_backend_info` IPC, kills the backend on exit, and writes per-session backend logs to the data dir (ADR-008).
+- FastAPI backend (`backend/laf/`): `/health` probe (db status, version, uptime), token-gated data routes via a constant-time ASGI middleware, system routes for runtime paths, path validation, and real prerequisite detection (python, ffmpeg, ollama, node, GPU via nvidia-smi, disk free), and settings API backed by SQLite. Standalone entrypoint `python -m laf.server` with structured JSON logging (no tokens in logs).
+- SQLite layer: WAL-mode connections (autocommit, foreign keys, busy timeout) and a forward-only migration runner (transactional per file, tracked in `schema_migrations`). Migration 0001 ships `app_settings` + `schema_info` (ADR-002, ADR-008).
+- React 19 + TypeScript + Vite 7 + Tailwind v4 frontend at the repo root: theme compiled from `design/tokens.json` (dark graphite, teal accent), bundled Inter/JetBrains Mono (OFL, no runtime web fetch), api client with Tauri IPC + browser-proxy fallback, first-run wizard (welcome → live prerequisites → storage validation → finish) and a studio home placeholder.
+- Tests: 22 new backend tests (connection, migrations incl. rollback, health, token enforcement, settings, system) — default suite now **29 passed**.
+- Windows tooling: `scripts/run-backend-dev.ps1` for browser-mode development.
+
+### Fixed
+- `scripts/setup-windows.ps1`: rewritten detection after Phase 1 owner verification exposed Windows PowerShell 5.1 false-OK rows and raw .NET type names in the version column. Verdicts now come only from `Get-Command`; version strings are best-effort; MSVC C++ toolset detection via `vswhere` added (required for Rust/Tauri linking).
+
+### Decisions
+- ADR-008 backend sidecar lifecycle: shell-spawned child process, session token over env var, Vite proxy for browser dev, forward-only migrations.
+
+### Known limitations (honest)
+- Dev-layout run only (`npm run tauri dev`); packaged installer is Phase 13.
+- Python resolution: repo venv → `py -3.12` → `LAF_PYTHON`; bundled runtime comes with packaging.
+- Migrations are forward-only; reversible down-migrations deferred (ROADMAP note).
+
 ## [0.1.0] — 2026-10-19
 
 ### Added

@@ -8,7 +8,7 @@ Status values: Done / In progress / Next / Planned / Blocked.
 |---|---|---|---|
 | 0 | Hardware assessment, scope, licensing, cost boundaries | Tier-3 plan approved; capability matrix and limitations documented | **Done** (2026-10-19) |
 | 1 | Repo init, architecture decisions, design system, Git workflow | Integrity tests pass; docs skeleton complete; conventional commits established | **Done** (this release) |
-| 2 | Desktop shell, first-run wizard, FastAPI backend, SQLite + migrations, health checks | App window opens; wizard completes; migrations up/down clean; health checks report GPU/disk/FFmpeg status | Next |
+| 2 | Desktop shell, first-run wizard, FastAPI backend, SQLite + migrations, health checks | Window opens via `npm run tauri dev`; wizard completes and stores state; migrations idempotent; `/health` + `/prereq` report db, GPU, disk, FFmpeg status; 29 tests pass | **Done** (this release — owner verification pending) |
 | 3 | Local LLM + TTS integration; script and caption generation | Topic → saved script works with real local model; TTS sample renders; fallback template path proven when no model is installed | Planned |
 | 4 | Scene planner, storyboard, style registry, series generation | Script → storyboard with per-scene prompts; 20-episode sample outline passes duplicate detection | Planned |
 | 5 | Basic rendering, subtitles, transitions — first complete vertical video | 9:16 MP4 passes automated QC (duration, aspect, audio levels, subtitle timing) | Planned |
@@ -29,6 +29,10 @@ Status values: Done / In progress / Next / Planned / Blocked.
 - Human approval gates publishing by default; unattended publishing only after explicit per-account opt-in.
 - Small, meaningful commits after every verified milestone (see CONTRIBUTING.md).
 - Hardware reality is respected: one GPU job at a time; storage governor enforced; 12 Mbit/s downloads are staged operations.
+
+## Migration policy (from Phase 2)
+
+Migrations are versioned, forward-only SQL files applied inside explicit transactions. Destructive schema changes get a new forward migration with a data-preservation step, never an in-place rewrite; reversible down-migrations stay deferred until the schema stabilizes (documented deviation from the original Phase 2 gate wording, decided in ADR-008).
 
 ## Explicitly deferred (from Phase 0, owner-approved)
 

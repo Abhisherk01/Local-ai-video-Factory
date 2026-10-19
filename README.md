@@ -9,8 +9,8 @@ Designed to operate up to **15 YouTube and Instagram accounts** across different
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Hardware assessment, licensing, cost boundaries | Done — approved 2026-10-19 |
-| 1 | Repository foundation, architecture decisions, design system, Git workflow | Done — this release |
-| 2 | Desktop shell, first-run wizard, backend, database, health checks | Next — awaiting approval |
+| 1 | Repository foundation, architecture decisions, design system, Git workflow | Done — verified on owner hardware 2026-10-19 |
+| 2 | Desktop shell, first-run wizard, backend, database, health checks | Done — this release (owner verification pending) |
 | 3–14 | Models, series engine, rendering, clipping, channels, publishing, analytics, packaging | Planned — see [ROADMAP.md](ROADMAP.md) |
 
 Build machine profile: **Tier 3** (RTX 2050 4 GB VRAM, 16 GB RAM, i5-12450H) — full analysis in [docs/PHASE0-HARDWARE-ASSESSMENT.md](docs/PHASE0-HARDWARE-ASSESSMENT.md).
@@ -34,13 +34,13 @@ Build machine profile: **Tier 3** (RTX 2050 4 GB VRAM, 16 GB RAM, i5-12450H) —
 
 ```
 local-ai-video-factory/
-├── docs/                 # Architecture docs, design system, phase reports
-├── design/               # Design tokens (single source of truth for UI)
-├── scripts/              # Windows setup + hardware probe (PowerShell)
-├── tests/                # Test suites (pytest)
-├── backend/              # Phase 2: FastAPI app, workers, queue, DB
-├── frontend/             # Phase 2: React app consumed by Tauri
-└── src-tauri/            # Phase 2: Tauri shell (Rust)
+├── index.html, vite.config.ts, package.json   # Vite app root (Tauri-standard layout)
+├── src/                 # React app (theme, api client, wizard, home)
+├── src-tauri/           # Tauri 2 shell (Rust) — spawns and supervises the backend
+├── backend/             # laf: FastAPI app, SQLite + migrations, server entrypoint
+├── scripts/             # Windows setup, hardware probe, backend dev launcher
+├── tests/               # pytest suite (repo integrity + backend)
+├── docs/, design/       # architecture + design tokens
 ```
 
 ## Development quick start (Windows PowerShell)
@@ -49,13 +49,25 @@ local-ai-video-factory/
 # 1. Verify prerequisites (installs nothing)
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1 -Check
 
-# 2. Create the pinned Python environment
+# 2. Create the pinned Python environment + backend dependencies
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip pytest
+python -m pip install --upgrade pip
+python -m pip install -r backend/requirements-dev.txt
 
-# 3. Run the test suite
+# 3. Run the test suite (expect: 29 passed)
 pytest -q
+
+# 4. Install frontend dependencies and run the desktop app (first Rust build takes minutes)
+npm install
+npm run tauri dev
+```
+
+Browser-only UI development (no Rust compile):
+
+```powershell
+.\scripts\run-backend-dev.ps1   # terminal 1: backend on 127.0.0.1:8756
+npm run dev                     # terminal 2: UI at http://localhost:5173
 ```
 
 Full setup instructions: [INSTALLATION.md](INSTALLATION.md). Problems: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
@@ -81,6 +93,13 @@ Full setup instructions: [INSTALLATION.md](INSTALLATION.md). Problems: [TROUBLES
 2. Nothing is marked "complete" without implementation and tests behind the claim.
 3. No secrets, model weights, generated media, or account data ever enter Git.
 4. Every non-free or non-local capability is labeled, off by default, and honest about its limits.
+
+## Known limitations (Phase 2, stated honestly)
+
+- The desktop app runs from the development layout (`npm run tauri dev`); a packaged installer arrives in Phase 13.
+- The shell resolves Python from the repo venv, `py -3.12`, or `LAF_PYTHON` — a bundled runtime comes with packaging.
+- Migrations are forward-only; destructive-change down-migrations are deferred until the schema stabilizes.
+- The wizard reports prerequisites; it never installs anything by itself.
 
 ## License
 

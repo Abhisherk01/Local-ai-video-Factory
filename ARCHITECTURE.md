@@ -1,6 +1,6 @@
 # Architecture — Local AI Video Factory
 
-Status: Phase 1 — decisions recorded as ADRs; implementation code arrives in Phase 2.
+Status: Phase 2 — desktop shell, backend, and database implemented and tested; AI integrations arrive in Phase 3+.
 This document is the source of truth for structural decisions. Change requires a new ADR entry.
 
 ## 1. System overview
@@ -8,7 +8,7 @@ This document is the source of truth for structural decisions. Change requires a
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │  Tauri 2 desktop shell (Rust)                                      │
-│  └─ WebView2: React 18 + TypeScript + Vite + Tailwind              │
+│  └─ WebView2: React 19 + TypeScript + Vite + Tailwind v4              │
 │     12 screens: setup wizard, dashboard, content studio, series    │
 │     manager, storyboard preview, clip extraction, render queue,    │
 │     model manager, channels, calendar, analytics, settings/logs    │
@@ -67,7 +67,12 @@ This document is the source of truth for structural decisions. Change requires a
 **Decision.** Core set: Qwen3-4B Q4 (LLM), SD 1.5 + LCM (images, 512–640 px), faster-whisper small int8 (STT), Kokoro-82M with Piper fallback (TTS). Wan 2.2 1.3B GGUF is an optional Phase 7 accent. SDXL, Wan 14B, and LTX-2 are excluded until a documented hardware upgrade.
 **Consequences.** Downloads stay ~6–8 GB; throughput targets are 6–12 min per 60 s 9:16 video; every model slot has a named fallback if deprecated.
 
-## 3. Data model preview (normalized in Phase 2 migrations)
+### ADR-008 — Backend sidecar lifecycle: spawned by the shell, session token, forward-only migrations
+**Context.** The React UI needs a stable, secure way to reach the FastAPI backend regardless of which port it binds; the backend must die with the app; the schema must evolve across 14 phases without corrupting user data.
+**Decision.** The Tauri shell picks a free 127.0.0.1 port, generates a 128-bit session token, and launches `python -m laf.server` as a child process, passing the token via the `LAF_TOKEN` environment variable (never via argv, never logged). The shell polls `/health` (open endpoint, token-free) until ready or fails honestly after 30 s, pointing at `backend.log` in the data dir. The UI learns the port/token only via the `get_backend_info` IPC command; browser dev mode uses a Vite proxy at `/laf-api` that injects a documented dev token. Migrations are versioned SQL files applied in ascending order inside explicit transactions, tracked in `schema_migrations`; they are forward-only — no down-migrations until the schema stabilizes.
+**Consequences.** No port/feature negotiation in config files; another local process cannot call data routes without the token (defense-in-depth on top of 127.0.0.1 binding); backend logs land in one per-session file for support; schema changes are reviewable, ordered, and idempotent to re-run. Packaged-install Python resolution (bundled runtime) replaces the dev-layout resolution in Phase 3+ packaging.
+
+## 3. Data model (baseline shipped in Phase 2; domain tables arrive with the phases that use them)
 
 | Entity | Notable fields / constraints |
 |---|---|
@@ -81,6 +86,8 @@ This document is the source of truth for structural decisions. Change requires a
 | `Post` | id, episode_id, account_id, platform_state, platform_media_id, idempotency_key UNIQUE(account_id, episode_id) |
 | `MetricSnapshot` | id, post_id, captured_at, metrics JSON, source (api/csv-import) |
 | `ModelRecord` | id, name, engine, license, size_bytes, vram_class, install_status, checksum |
+
+Phase 2 ships migration 0001 with `app_settings` (key/value, wizard state) and `schema_info`. Each later phase adds its tables in their own numbered migrations as the features that need them land — never before.
 
 ## 4. Adapter contracts (interfaces frozen in Phase 3–4)
 
@@ -106,15 +113,28 @@ Every adapter validates inputs, runs as a job (never inline on the API thread), 
 
 ## 6. Testing strategy
 
+Current default suite: **29 tests** — 7 repo-integrity, 4 SQLite connection, 5 migrations, 3 health, 5 settings/token, 5 system/prereq. Breakdown by layer:
+
 | Layer | Scope | Runs where |
 |---|---|---|
 | Unit | Pure logic (planning, dedup, scoring, state machines) | Always, default suite |
-| Repo integrity | Docs/tokens/scripts hygiene (this phase) | Always, default suite |
+| Repo integrity | Docs/tokens/scripts hygiene (Phase 1) | Always, default suite |
 | Integration-local | FFmpeg renders, SQLite migrations, queue recovery against real temp files | Always, fast |
 | Hardware-gated | Diffusion/TTS/STT smoke tests | Only with `LAF_ENABLE_GPU_TESTS=1` |
 | External-mocked | Platform APIs always mocked in the default suite | Always |
 | Real-account | Manual scripts against owner's own accounts | Phases 10–11 only, explicit opt-in |
 
-## 7. Planned repository growth
+## 7. Repository layout (Phase 2 actual)
 
-Phase 2 adds `backend/` (FastAPI app package, migrations, queue, workers), `frontend/` (Vite app), and `src-tauri/` (Rust shell). `design/tokens.json` remains the single source of truth and compiles into Tailwind theme + CSS variables.
+```
+local-ai-video-factory/
+├── index.html, vite.config.ts, package.json   # Vite app root (UI at repo root, Tauri-standard)
+├── src/                # React app: theme.css (compiled tokens), api client, wizard, home
+├── src-tauri/          # Tauri 2 shell: Cargo.toml, main.rs (sidecar lifecycle), icons
+├── backend/            # laf package: FastAPI app, SQLite layer, migrations, server entrypoint
+├── scripts/            # setup-windows.ps1, probe-hardware.ps1, run-backend-dev.ps1
+├── tests/              # pytest: integrity + backend suites (single suite, repo-root run)
+├── docs/, design/      # architecture docs, design tokens
+```
+
+`design/tokens.json` remains the single source of truth and is compiled into the Tailwind v4 `@theme` block in `src/theme.css`.
