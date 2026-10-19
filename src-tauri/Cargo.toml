@@ -16,6 +16,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.9"
 
+[target.'cfg(windows)'.dependencies]
+# Job Object kill-on-close: the backend must never outlive the shell
+# (Phase 3 orphan fix). windows-sys is already in the dependency tree
+# via Tauri, so this adds no new third-party crate.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true

@@ -150,6 +150,51 @@ struct SpawnedBackend {
     pid: Option<u32>,
 }
 
+/// Put the backend child into a Windows Job Object with KILL_ON_JOB_CLOSE.
+///
+/// Why (Phase 3 orphan fix): the backend is spawned with CREATE_NO_WINDOW,
+/// which detaches it from our console - Ctrl+C on the dev terminal kills
+/// the shell but never reaches the backend, and kill_backend() only runs
+/// on the graceful exit path (RunEvent::Exit). With the job object, the
+/// kernel closes our job handle when the shell exits for ANY reason
+/// (graceful close, Ctrl+C, crash, taskkill) and terminates the backend
+/// with it. kill_backend() remains the tidy first line of defense.
+#[cfg(target_os = "windows")]
+fn assign_backend_job_object(child: &Child) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job == std::mem::zeroed() {
+            return Err("CreateJobObjectW failed".to_string());
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 {
+            return Err("SetInformationJobObject failed".to_string());
+        }
+        let process_handle = child.as_raw_handle() as _;
+        if AssignProcessToJobObject(job, process_handle) == 0 {
+            return Err("AssignProcessToJobObject failed".to_string());
+        }
+        // The job handle is intentionally never closed: KILL_ON_JOB_CLOSE
+        // fires when the shell process exits and releases it. One handle
+        // per backend spawn, released by the kernel at exit.
+    }
+    Ok(())
+}
+
 fn spawn_backend(app: &tauri::AppHandle) -> Result<SpawnedBackend, String> {
     let python = find_python()?;
 
@@ -215,6 +260,13 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<SpawnedBackend, String> {
         )
     })?;
     let pid = Some(child.id());
+
+    // Non-fatal on failure: the graceful kill path still works; this is
+    // the backstop for hard exits (see assign_backend_job_object docs).
+    #[cfg(target_os = "windows")]
+    {
+        let _ = assign_backend_job_object(&child);
+    }
 
     Ok(SpawnedBackend {
         child,
