@@ -1,0 +1,21 @@
+[project]
+name = "local-ai-video-factory"
+version = "0.1.0"
+description = "Local-first Windows desktop factory for scripted, narrated, captioned short-form video across up to 15 YouTube/Instagram channels, with zero paid generation APIs."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "rajbh" }]
+requires-python = ">=3.12,<3.13"
+
+[project.urls]
+# Homepage will be added when a remote is configured.
+
+# ------------------------------------------------------------------
+# Python is pinned to 3.12.x on purpose: the local AI stack
+# (torch / diffusers / faster-whisper) has dependable wheels for
+# 3.12, while the system default (3.14) is too new to rely on.
+# ------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

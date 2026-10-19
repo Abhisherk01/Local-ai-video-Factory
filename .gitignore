@@ -1,0 +1,79 @@
+# ============================================================
+# Local AI Video Factory - git hygiene
+# Never commit: secrets, model weights, generated media, user data.
+# ============================================================
+
+# --- Secrets & local config ---
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.ipynb_checkpoints/
+
+# --- Node / frontend (Phase 2+) ---
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# --- Rust / Tauri (Phase 2+) ---
+src-tauri/target/
+src-tauri/gen/
+
+# --- Model weights & AI caches (NEVER commit these) ---
+models/
+ollama/
+.hf-cache/
+.torch-cache/
+*.gguf
+*.safetensors
+*.onnx
+*.ckpt
+*.pt
+*.bin
+
+# --- Generated media & renders (NEVER commit user/derived media) ---
+media/
+renders/
+exports/
+clips/
+thumbnails/
+subtitles/
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.flac
+# Small, deterministic test fixtures may be whitelisted explicitly:
+!tests/fixtures/**
+
+# --- App data & logs ---
+data/
+logs/
+*.log
+*.sqlite3
+*.db
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
