@@ -11,6 +11,7 @@ import logging
 import os
 import platform
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from laf.api.state import AppState
 
 router = APIRouter(prefix="/api/v1/system")
 logger = logging.getLogger("laf.system")
+
+_SMI_TIMEOUT_S = 4
 
 
 @router.get("/paths")
@@ -82,6 +85,51 @@ def validate_path(payload: PathValidateRequest) -> dict[str, object]:
     }
 
 
+def _gpu_check() -> dict[str, object]:
+    """Detect NVIDIA GPU via nvidia-smi (name + VRAM). Never installs."""
+    smi = shutil.which("nvidia-smi")
+    if not smi:
+        return {
+            "name": "gpu",
+            "ok": False,
+            "required": False,
+            "detail": "no NVIDIA GPU detected - CPU/vector engines will be used "
+            "until one is available",
+        }
+    try:
+        result = subprocess.run(
+            [
+                smi,
+                "--query-gpu=name,memory.total",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_SMI_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {
+            "name": "gpu",
+            "ok": False,
+            "required": False,
+            "detail": "nvidia-smi present but did not respond",
+        }
+    line = (result.stdout or "").strip().splitlines()
+    if result.returncode == 0 and line:
+        return {
+            "name": "gpu",
+            "ok": True,
+            "required": False,
+            "detail": line[0].strip(),
+        }
+    return {
+        "name": "gpu",
+        "ok": False,
+        "required": False,
+        "detail": "nvidia-smi present but reported no usable GPU",
+    }
+
+
 @router.get("/prereq")
 def prereq(request: Request) -> list[dict[str, object]]:
     """Real detection, honest labels. Nothing here installs anything."""
@@ -127,6 +175,8 @@ def prereq(request: Request) -> list[dict[str, object]]:
             "detail": node_path or "development builds only (frontend tooling)",
         }
     )
+
+    checks.append(_gpu_check())
 
     try:
         free_gb = round(

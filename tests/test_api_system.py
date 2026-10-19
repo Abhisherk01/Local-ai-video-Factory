@@ -32,7 +32,7 @@ def test_validate_missing_dir_reports_honestly(client, tmp_path) -> None:
 
 def test_prereq_checks_have_honest_shape(client) -> None:
     checks = client.get("/api/v1/system/prereq").json()
-    assert isinstance(checks, list) and len(checks) >= 4
+    assert isinstance(checks, list) and len(checks) >= 5
     for item in checks:
         assert set(item.keys()) == {"name", "ok", "required", "detail"}
         assert isinstance(item["ok"], bool)
@@ -41,6 +41,15 @@ def test_prereq_checks_have_honest_shape(client) -> None:
     by_name = {item["name"]: item for item in checks}
     assert by_name["python"]["ok"] is True
     assert by_name["python"]["required"] is True
-    # ffmpeg/ollama/disk are advisory in Phase 2 (not required).
+    # ffmpeg/ollama/gpu/disk are advisory in Phase 2 (not required).
     assert by_name["ffmpeg"]["required"] is False
     assert by_name["ollama"]["required"] is False
+    assert by_name["gpu"]["required"] is False
+
+
+def test_gpu_check_never_crashes_and_reports_something(client) -> None:
+    """The GPU check runs nvidia-smi if present; either way it returns one row."""
+    checks = client.get("/api/v1/system/prereq").json()
+    gpu = [item for item in checks if item["name"] == "gpu"]
+    assert len(gpu) == 1
+    assert isinstance(gpu[0]["detail"], str) and gpu[0]["detail"]
