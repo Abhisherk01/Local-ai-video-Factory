@@ -155,6 +155,7 @@ def handle_script_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
         "model": result["model"],
         "chars": len(result["text"]),
         "thinking_stripped": result["thinking_stripped"],
+        "think_truncated": result.get("think_truncated", False),
     }
 
 
@@ -374,6 +375,7 @@ def handle_storyboard_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict
         **stored,
         "model": result["model"],
         "thinking_stripped": result["thinking_stripped"],
+        "think_truncated": result.get("think_truncated", False),
     }
 
 
@@ -500,6 +502,7 @@ def handle_series_outline_gen(payload: dict, job: dict, ctx: HandlerContext) -> 
         "method": "local_ollama",
         "model": result["model"],
         "thinking_stripped": result["thinking_stripped"],
+        "think_truncated": result.get("think_truncated", False),
     }
 
 
@@ -646,6 +649,7 @@ def handle_video_render(payload: dict, job: dict, ctx: HandlerContext) -> dict:
         scenes=list(storyboard["scenes"]),
         audio_mode="piper" if use_piper else "tone",
         piper=piper if use_piper else None,
+        models_dir=ctx.models_dir,
     )
     set_episode_status(ctx.conn, int(episode_id), "rendered")
     return result

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from laf.adapters import OllamaAdapter, PiperAdapter, KokoroAdapter
+from laf.adapters.ollama import effective_prompt, strip_think
 from laf.adapters.base import AdapterUnavailable
 
 
@@ -105,3 +106,43 @@ def test_kokoro_probe_is_honest_about_phase5() -> None:
     assert "Phase 5" in status.detail
     with pytest.raises(AdapterUnavailable, match="Phase 5"):
         KokoroAdapter().synthesize("text", "out.wav")
+
+
+# ---------------------------------------------------------------------------
+# Phase 6a.1: qwen3 think-leak hardening (strip_think + /no_think)
+# ---------------------------------------------------------------------------
+
+
+def test_strip_think_closed_block_removed() -> None:
+    text, stripped, truncated = strip_think(
+        "<think>plan the script first</think>Hook line. Body here."
+    )
+    assert text == "Hook line. Body here."
+    assert stripped is True and truncated is False
+
+
+def test_strip_think_unclosed_block_truncated() -> None:
+    text, stripped, truncated = strip_think(
+        "<think>rambling plan with no closing tag"
+    )
+    assert text == ""
+    assert stripped is True and truncated is True
+
+
+def test_strip_think_multiple_blocks_and_residue() -> None:
+    text, stripped, truncated = strip_think(
+        "<think>a</think>Keep <think>b</think>this. <think>tail without close"
+    )
+    assert text == "Keep this."
+    assert stripped is True and truncated is True
+
+
+def test_strip_think_clean_text_untouched() -> None:
+    text, stripped, truncated = strip_think("A clean narration script.")
+    assert text == "A clean narration script."
+    assert stripped is False and truncated is False
+
+
+def test_no_think_switch_only_for_qwen3() -> None:
+    assert effective_prompt("Write it.", "qwen3:4b").endswith("/no_think")
+    assert effective_prompt("Write it.", "llama3:8b") == "Write it."

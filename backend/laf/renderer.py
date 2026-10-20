@@ -21,8 +21,10 @@ ffmpeg call with cwd=workdir and referencing `subs.ass` relatively.
 
 from __future__ import annotations
 
+import array
 import json
 import math
+import random
 import re
 import shutil
 import struct
@@ -62,6 +64,200 @@ def resolve_ffprobe() -> str | None:
 
 def palette_for(slug: str) -> tuple[str, str, str]:
     return PALETTES.get(str(slug), PALETTES["dark_cinematic"])
+
+
+# ---------------------------------------------------------------------------
+# music / ambience beds (Phase 6a)
+# ---------------------------------------------------------------------------
+
+# Owner channel-audio brief: narration stays clear, the bed sits well
+# under the voice, ambience matches the channel. Beds key off the
+# EXISTING per-episode style dropdown: a builtin style maps to a
+# procedural bed generated as a 12 s stereo loop (stdlib only, seeded ->
+# reproducible). Dropping a properly licensed audio file named
+# <style_slug>.wav/.mp3/... into <models_dir>/audio/beds/ takes
+# precedence. minimal_mono intentionally has no bed (silence is the
+# aesthetic); unknown slugs get no bed. Beds only run under real
+# narration (audio_mode == "piper") - never under the tone placeholder.
+# No bed file + unmapped slug = byte-identical old behaviour (the same
+# honest-fallback contract as the tone placeholder).
+BED_GAIN_DB = -18.0
+BED_RATE = 44100
+BED_LOOP_S = 12.0
+BED_SEAM_S = 0.15
+
+STYLE_BEDS: dict[str, str] = {
+    "dark_cinematic": "drone",   # low tense drone - moody / suspense
+    "warm_documentary": "wind",  # soft outdoor air - nature / educational
+    "clean_product": "pad",      # subtle modern pad - facts / product
+    "bold_motion": "pad",        # quiet bed under kinetic cuts
+    "retro_analog": "rain",      # film-era ambience
+}
+
+_BED_EXTS = (".wav", ".mp3", ".m4a", ".ogg", ".flac")
+
+
+def _bed_write(path: Path, samples: array.array) -> Path:
+    """Write mono samples as a 16-bit stereo wav at BED_RATE."""
+    stereo = array.array("h", bytes(4 * len(samples)))
+    stereo[0::2] = samples
+    stereo[1::2] = samples
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(BED_RATE)
+        wav.writeframes(stereo.tobytes())
+    return path
+
+
+def _seam_dip(samples: array.array, fade_s: float = BED_SEAM_S) -> array.array:
+    """Fade the loop head/tail down so a noise loop never clicks at the
+    wrap point. At bed gain this reads as a breath, not a dip."""
+    n = min(len(samples), int(BED_RATE * fade_s))
+    for i in range(n):
+        w = i / float(n)
+        samples[i] = int(samples[i] * w)
+        samples[-1 - i] = int(samples[-1 - i] * w)
+    return samples
+
+
+def _sine_bed(
+    freqs: list[tuple[float, float]], lfo_hz: float, lfo_depth: float
+) -> array.array:
+    """Seamless sine-stack loop: every frequency (partials AND the LFO)
+    must complete an integer number of cycles per BED_LOOP_S, i.e. be
+    k / BED_LOOP_S Hz. 55/110/165/220/330 and 0.25 / (1/12) all are."""
+    n = int(BED_RATE * BED_LOOP_S)
+    acc = [0.0] * n
+    for k, (f, a) in enumerate(freqs):
+        phase0 = 2.0 * math.pi * (k / 3.0)  # per-partial LFO phase offset
+        for i in range(n):
+            t = i / BED_RATE
+            lfo = 1.0 - lfo_depth / 2.0 + (lfo_depth / 2.0) * math.sin(
+                2.0 * math.pi * lfo_hz * t + phase0
+            )
+            acc[i] += a * lfo * math.sin(2.0 * math.pi * f * t)
+    peak = max(1e-9, max(abs(v) for v in acc))
+    g = 0.30 / peak
+    return array.array("h", [int(v * g * 32767) for v in acc])
+
+
+def _noise_bed(
+    kind: str, lowpass: float, white_mix: float, gust_depth: float
+) -> array.array:
+    """Looped filtered-noise bed (wind = dark leaky integrator, rain =
+    brighter with a little white shimmer). Gust LFO is 0.25 Hz = 3
+    cycles per loop, so it is loop-seamless too. Seeded per kind."""
+    rnd = random.Random(kind)
+    n = int(BED_RATE * BED_LOOP_S)
+    y = 0.0
+    out = array.array("h")
+    for i in range(n):
+        w = rnd.random() * 2.0 - 1.0
+        y += lowpass * (w - y)
+        t = i / BED_RATE
+        lfo = 1.0 - gust_depth / 2.0 + (gust_depth / 2.0) * math.sin(
+            2.0 * math.pi * 0.25 * t
+        )
+        v = (1.0 - white_mix) * y + white_mix * w
+        out.append(int(v * lfo * 0.30 * 32767))
+    return out
+
+
+def generate_bed(kind: str, out_path: Path) -> Path:
+    """Generate a 12 s ambience loop for `kind` (original audio, zero
+    licensing concerns). Sine beds are mathematically seamless; noise
+    beds get a seam dip instead."""
+    if kind in ("drone", "pad"):
+        if kind == "drone":
+            samples = _sine_bed(
+                [(55.0, 0.50), (110.0, 0.30), (165.0, 0.15)],
+                lfo_hz=0.25, lfo_depth=0.6,
+            )
+        else:
+            samples = _sine_bed(
+                [(110.0, 0.40), (220.0, 0.25), (330.0, 0.12)],
+                lfo_hz=1.0 / 12.0, lfo_depth=0.8,
+            )
+    elif kind == "wind":
+        samples = _seam_dip(
+            _noise_bed("wind", lowpass=0.05, white_mix=0.0, gust_depth=0.9)
+        )
+    elif kind == "rain":
+        samples = _seam_dip(
+            _noise_bed("rain", lowpass=0.30, white_mix=0.15, gust_depth=0.3)
+        )
+    else:
+        raise ValueError(f"unknown bed kind: {kind}")
+    return _bed_write(out_path, samples)
+
+
+def resolve_bed(
+    style_slug: str, models_dir: Path | None, workdir: Path
+) -> tuple[str, Path] | None:
+    """Pick the bed for an episode: an owner-dropped file named
+    <style_slug>.<ext> in <models_dir>/audio/beds/ wins, else the
+    style's procedural bed is generated into the render workdir, else
+    None (no bed)."""
+    if models_dir is None:
+        return None
+    slug = str(style_slug)
+    beds = Path(models_dir) / "audio" / "beds"
+    if beds.is_dir():
+        for ext in _BED_EXTS:
+            candidate = beds / f"{slug}{ext}"
+            if candidate.exists():
+                return (f"file:{candidate.name}", candidate)
+    kind = STYLE_BEDS.get(slug)
+    if kind is None:
+        return None
+    path = Path(workdir) / "bed.wav"
+    generate_bed(kind, path)
+    return (f"procedural:{kind}", path)
+
+
+def mix_bed(
+    ffmpeg: str,
+    video_path: Path,
+    bed_path: Path,
+    out_path: Path,
+    total_s: float,
+    *,
+    gain_db: float = BED_GAIN_DB,
+) -> Path:
+    """Loop `bed_path` under the finished video and re-mux in place.
+
+    The video stream is stream-copied (fast); only audio re-encodes.
+    The bed is trimmed to the video length, attenuated by gain_db,
+    faded in/out, then summed under the voice with amerge+pan - a
+    version-proof pair that avoids amix's newer normalize option. The
+    voice path passes through at unity gain: narration loudness is
+    untouched, only the bed level is set.
+    """
+    out_path = Path(out_path)
+    out_tmp = out_path.with_name(out_path.stem + "_bedtmp.mp4")
+    fade_out_start = max(0.0, float(total_s) - 2.5)
+    fc = (
+        f"[1:a]atrim=0:{float(total_s):.3f},volume={gain_db}dB,"
+        f"afade=t=in:d=2.0,afade=t=out:st={fade_out_start:.2f}:d=2.5[bed];"
+        f"[0:a][bed]amerge=inputs=2,pan=stereo|c0=c0+c2|c1=c1+c3[aout]"
+    )
+    cmd = [
+        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(video_path),
+        "-stream_loop", "-1", "-i", str(bed_path),
+        "-filter_complex", fc,
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+        "-ar", "44100", "-ac", "2",
+        str(out_tmp),
+    ]
+    _run(cmd, what="bed mix")
+    shutil.move(str(out_tmp), str(out_path))
+    return out_path
+
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +669,7 @@ def render_episode(
     scenes: list[dict[str, Any]],
     audio_mode: str,
     piper: Any | None = None,
+    models_dir: Path | None = None,
     width: int = WIDTH,
     height: int = HEIGHT,
 ) -> dict[str, Any]:
@@ -518,6 +715,14 @@ def render_episode(
             ffmpeg, clips, durations, "subs.ass", out_path,
             cwd=workdir, width=width, height=height,
         )
+
+        bed_label: str | None = None
+        if models_dir is not None and audio_mode == "piper":
+            bed = resolve_bed(style_slug, models_dir, workdir)
+            if bed is not None:
+                bed_label, bed_path = bed
+                mix_bed(ffmpeg, out_path, bed_path, out_path, total)
+
         qc = qc_probe(out_path, total, width=width, height=height)
         if not qc["ok"]:
             failed = "; ".join(
@@ -531,6 +736,7 @@ def render_episode(
             "duration_s": total,
             "scene_count": len(scenes),
             "style_slug": str(style_slug),
+            "bed": bed_label,
             "qc": qc,
         }
     finally:

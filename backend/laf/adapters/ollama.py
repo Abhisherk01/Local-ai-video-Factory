@@ -29,6 +29,37 @@ import urllib.request
 from laf.adapters.base import AdapterStatus, AdapterUnavailable
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+_THINK_OPEN_RE = re.compile(r"<think>.*$", re.DOTALL)
+
+
+def strip_think(raw: str) -> tuple[str, bool, bool]:
+    """Remove qwen3 reasoning from a raw completion.
+
+    Returns (text, stripped_any, truncated). Closed <think>...</think>
+    blocks are removed wherever they appear. A residual UNCLOSED
+    <think> means the model ran off mid-reasoning: everything from it
+    to the end is thinking, so it is cut too and `truncated` says so
+    honestly (an empty result becomes the handler's retryable empty
+    failure - truncated reasoning is never stored as narration).
+    """
+    stripped = bool(_THINK_RE.search(raw))
+    text = _THINK_RE.sub("", raw)
+    truncated = False
+    idx = text.find("<think>")
+    if idx != -1:
+        text = text[:idx]
+        truncated = True
+    return text.strip(), (stripped or truncated), truncated
+
+
+def effective_prompt(prompt: str, model: str) -> str:
+    """qwen3's documented soft switch: `/no_think` in the prompt stops
+    reasoning even when a daemon ignores the `think` API flag. No-op
+    for non-qwen3 models."""
+    if str(model).startswith("qwen3"):
+        return f"{prompt} /no_think"
+    return prompt
 _PROBE_TIMEOUT_S = 0.6
 
 
@@ -100,7 +131,7 @@ class OllamaAdapter:
         or the HTTP call fails for any reason."""
         body: dict = {
             "model": model or self.model,
-            "prompt": prompt,
+            "prompt": effective_prompt(prompt, model or self.model),
             "stream": False,
             # Narration never wants reasoning tokens; generating them (plus
             # the non-streaming wait) timed out CPU-only machines in the
@@ -130,11 +161,12 @@ class OllamaAdapter:
             ) from exc
 
         raw = str(data.get("response", ""))
-        text = _THINK_RE.sub("", raw).strip()
+        text, stripped, truncated = strip_think(raw)
         return {
             "text": text,
             "raw_chars": len(raw),
-            "thinking_stripped": bool(_THINK_RE.search(raw)),
+            "thinking_stripped": stripped,
+            "think_truncated": truncated,
             "model": body["model"],
             "method": "local_ollama",
             "total_duration_ns": data.get("total_duration"),
