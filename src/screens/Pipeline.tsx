@@ -86,7 +86,11 @@ export default function Pipeline({ version }: PipelineProps) {
   const [workerRunning, setWorkerRunning] = useState<boolean | null>(null);
   const [adapters, setAdapters] = useState<AdaptersInfo | null>(null);
   const [styles, setStyles] = useState<StyleInfo[]>([]);
-  const [styleChoice, setStyleChoice] = useState("dark_cinematic");
+  // Per-episode style choice (bug fix: one shared value made every row's
+  // picker change together and sent the last-touched style with whichever
+  // episode's Storyboard was clicked). Keyed by episode id; each defaults
+  // to dark_cinematic, which the seeded registry always provides.
+  const [styleByEp, setStyleByEp] = useState<Record<number, string>>({});
   const [series, setSeries] = useState<SeriesInfo[]>([]);
   const [seriesName, setSeriesName] = useState("");
   const [seriesPremise, setSeriesPremise] = useState("");
@@ -166,7 +170,7 @@ export default function Pipeline({ version }: PipelineProps) {
     setBusy(true);
     try {
       await api.requestStoryboard(ep.id, {
-        style_slug: styleChoice,
+        style_slug: styleByEp[ep.id] ?? "dark_cinematic",
         mode: "auto",
       });
       setPlanOpenFor(ep.id);
@@ -294,7 +298,7 @@ export default function Pipeline({ version }: PipelineProps) {
         <div className="flex items-center justify-between">
           <h2 className="text-section text-ink">Episodes</h2>
           <span className="font-mono text-caption text-ink-mute">
-            {episodes.length}
+            {episodes.length} - picker v2
           </span>
         </div>
         {episodes.length === 0 ? (
@@ -339,9 +343,14 @@ export default function Pipeline({ version }: PipelineProps) {
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                       <select
                         className="rounded-md border border-line-subtle bg-base px-2 py-1.5 font-mono text-caption text-ink-dim"
-                        value={styleChoice}
-                        title="Visual style applied to every scene prompt"
-                        onChange={(e) => setStyleChoice(e.target.value)}
+                        value={styleByEp[ep.id] ?? "dark_cinematic"}
+                        title="Visual style applied to this episode's scene prompts"
+                        onChange={(e) =>
+                          setStyleByEp((m) => ({
+                            ...m,
+                            [ep.id]: e.target.value,
+                          }))
+                        }
                       >
                         {styles.length === 0 && (
                           <option value="dark_cinematic">dark_cinematic</option>
