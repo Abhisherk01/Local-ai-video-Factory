@@ -22,6 +22,7 @@ function statusTone(status: string): StatusChipProps["tone"] {
     case "succeeded":
     case "scripted":
     case "storyboarded":
+    case "rendered":
     case "published":
       return "ok";
     case "running":
@@ -183,6 +184,18 @@ export default function Pipeline({ version }: PipelineProps) {
     }
   }
 
+  async function renderEpisode(ep: Episode) {
+    setBusy(true);
+    try {
+      await api.requestRender(ep.id, { allow_fallback: true });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createSeriesOutline() {
     if (!seriesName.trim() || !seriesPremise.trim() || busy) return;
     setBusy(true);
@@ -312,7 +325,19 @@ export default function Pipeline({ version }: PipelineProps) {
               const scriptJob = jobs.find(
                 (j) => j.episode_id === ep.id && j.type.startsWith("script"),
               );
-              const planReady = ep.status === "storyboarded";
+              const renderJob = jobs.find(
+                (j) => j.episode_id === ep.id && j.type.startsWith("video"),
+              );
+              const mp4 =
+                renderJob && renderJob.status === "succeeded"
+                  ? renderJob.result
+                  : null;
+              const mp4Path =
+                mp4 && typeof mp4.path === "string" ? mp4.path : null;
+              const mp4Dur =
+                mp4 && typeof mp4.duration_s === "number" ? mp4.duration_s : null;
+              const planReady =
+                ep.status === "storyboarded" || ep.status === "rendered";
               return (
                 <li key={ep.id} className="flex flex-col gap-1 py-3">
                   <div className="flex items-center justify-between gap-3">
@@ -393,6 +418,17 @@ export default function Pipeline({ version }: PipelineProps) {
                       )}
                       <button
                         className={btnGhost}
+                        disabled={
+                          busy ||
+                          (ep.status !== "storyboarded" && ep.status !== "rendered")
+                        }
+                        onClick={() => void renderEpisode(ep)}
+                        title="Render the finished 9:16 MP4 (piper voice when installed, tone placeholder otherwise)"
+                      >
+                        Render
+                      </button>
+                      <button
+                        className={btnGhost}
                         disabled={busy}
                         onClick={() => void removeEpisode(ep)}
                         title="Delete episode (job history is kept)"
@@ -405,6 +441,18 @@ export default function Pipeline({ version }: PipelineProps) {
                     <p className="font-mono text-caption text-ink-mute">
                       job #{scriptJob.id} {scriptJob.status}
                       {scriptJob.error ? ` - ${scriptJob.error}` : ""}
+                    </p>
+                  )}
+                  {renderJob && renderJob.status !== "succeeded" && (
+                    <p className="font-mono text-caption text-ink-mute">
+                      render job #{renderJob.id} {renderJob.status}
+                      {renderJob.error ? ` - ${renderJob.error}` : ""}
+                    </p>
+                  )}
+                  {mp4Path && (
+                    <p className="truncate font-mono text-caption text-success">
+                      mp4: {mp4Path}
+                      {mp4Dur != null ? ` (${mp4Dur.toFixed(1)}s)` : ""}
                     </p>
                   )}
                   {planOpenFor === ep.id && (

@@ -52,6 +52,7 @@ def test_known_types_cover_phases_3_and_4() -> None:
         "storyboard_gen",
         "tts_fallback",
         "tts_render",
+        "video_render",
     ]
 
 

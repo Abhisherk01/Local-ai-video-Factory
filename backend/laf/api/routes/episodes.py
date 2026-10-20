@@ -161,3 +161,37 @@ def fetch_storyboard(episode_id: int, request: Request) -> dict:
     if get_episode(state.conn, episode_id) is None:
         raise HTTPException(status_code=404, detail="episode not found")
     return {"storyboard": get_storyboard(state.conn, episode_id)}
+
+
+class RenderRequest(BaseModel):
+    allow_fallback: bool = True
+    idempotency_key: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/{episode_id}/render", status_code=202)
+def enqueue_render(episode_id: int, payload: RenderRequest, request: Request) -> dict:
+    """Queue a video_render job for a storyboarded episode (Phase 5).
+
+    Renders the scene plan to a 9:16 MP4: style gradient cards, burned
+    timed captions, narration audio (piper when installed, honest tone
+    placeholder otherwise). A storyboard is required - queueing a render
+    without scenes would just burn an attempt.
+    """
+    state: AppState = request.app.state.laf
+    episode = get_episode(state.conn, episode_id)
+    if episode is None:
+        raise HTTPException(status_code=404, detail="episode not found")
+    storyboard = get_storyboard(state.conn, episode_id)
+    if storyboard is None or not storyboard.get("scenes"):
+        raise HTTPException(
+            status_code=400,
+            detail="episode has no storyboard yet - run Storyboard first",
+        )
+    job, created = queue.enqueue(
+        state.conn,
+        "video_render",
+        payload={"allow_fallback": payload.allow_fallback},
+        episode_id=episode_id,
+        idempotency_key=payload.idempotency_key,
+    )
+    return {"job": job, "created": created}

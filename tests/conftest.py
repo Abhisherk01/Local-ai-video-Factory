@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from laf.api.main import create_app
+
+# Hermetic test session: handler tests expect Ollama to be ABSENT. With a
+# live Ollama on 11434 they dial the real model and appear to freeze for
+# minutes. Pin a dead port for every test process; tests that need a
+# specific URL (fake servers) monkeypatch.setenv it and still win, because
+# adapters read the env at construction time.
+os.environ["LAF_OLLAMA_URL"] = "http://127.0.0.1:9"
+os.environ["LAF_OLLAMA_TIMEOUT"] = "30"
 
 TEST_TOKEN = "test-token-1234"
 

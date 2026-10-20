@@ -32,16 +32,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from laf import renderer
 from laf.adapters import AdapterUnavailable, OllamaAdapter, PiperAdapter
 from laf.dedupe import filter_duplicates
-from laf.episodes import create_episode, get_episode, set_episode_script
+from laf.episodes import (
+    create_episode,
+    get_episode,
+    set_episode_script,
+    set_episode_status,
+)
 from laf.series import (
     fallback_outline,
     get_series,
     list_series_episodes,
     set_series_method,
 )
-from laf.storyboards import replace_storyboard
+from laf.storyboards import get_storyboard, replace_storyboard
 from laf.styles import DEFAULT_STYLE_SLUG, get_style
 
 logger = logging.getLogger("laf.jobs.handlers")
@@ -595,6 +601,56 @@ def _render_tone(rate: int, seconds: float, freq: float = 220.0) -> bytes:
 # registry
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# video render (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def handle_video_render(payload: dict, job: dict, ctx: HandlerContext) -> dict:
+    """Render a storyboarded episode to a 9:16 MP4 (Phase 5).
+
+    Scene rows from the storyboard are the contract (ADR-011). Audio is
+    piper when installed, else the honest tone placeholder when
+    allow_fallback. ffmpeg/ffprobe come from PATH (Phase 5 prereq).
+    """
+    ffmpeg = renderer.resolve_ffmpeg()
+    if not ffmpeg:
+        raise PrereqMissing(
+            "ffmpeg not found on PATH - install it and restart the shell"
+        )
+    episode_id = job.get("episode_id")
+    if episode_id is None:
+        raise NonRetryable("render job has no episode_id")
+    episode = get_episode(ctx.conn, int(episode_id))
+    if episode is None:
+        raise NonRetryable(f"episode {episode_id} disappeared mid-job")
+    storyboard = get_storyboard(ctx.conn, int(episode_id))
+    if storyboard is None or not storyboard.get("scenes"):
+        raise NonRetryable("no storyboard - run Storyboard first")
+
+    piper = PiperAdapter(models_dir=ctx.models_dir)
+    use_piper = piper.available().available
+    if not use_piper and not payload.get("allow_fallback", True):
+        raise PrereqMissing("piper_unavailable: see /api/v1/adapters for the fix")
+
+    renders_dir = ctx.data_dir / "media" / "renders"
+    renders_dir.mkdir(parents=True, exist_ok=True)
+    out_path = renders_dir / f"ep{int(episode_id)}_job{int(job['id'])}.mp4"
+    workdir = renders_dir / f"_work_job{int(job['id'])}"
+    result = renderer.render_episode(
+        ffmpeg,
+        workdir=workdir,
+        out_path=out_path,
+        title=str(episode["title"]),
+        style_slug=str(storyboard.get("style_slug") or DEFAULT_STYLE_SLUG),
+        scenes=list(storyboard["scenes"]),
+        audio_mode="piper" if use_piper else "tone",
+        piper=piper if use_piper else None,
+    )
+    set_episode_status(ctx.conn, int(episode_id), "rendered")
+    return result
+
+
 JOB_HANDLERS: dict[str, Handler] = {
     "script_gen": handle_script_gen,
     "script_fallback": handle_script_fallback,
@@ -604,6 +660,7 @@ JOB_HANDLERS: dict[str, Handler] = {
     "series_outline_fallback": handle_series_outline_fallback,
     "tts_render": handle_tts_render,
     "tts_fallback": handle_tts_fallback,
+    "video_render": handle_video_render,
 }
 
 

@@ -194,6 +194,14 @@ export const api = {
       { method: "POST", json: body },
     ),
 
+  // -- Phase 5: render -----------------------------------------------------
+
+  requestRender: (id: number, body: { allow_fallback?: boolean }) =>
+    request<{ job: PipelineJob; created: boolean }>(
+      `/api/v1/episodes/${id}/render`,
+      { method: "POST", json: body },
+    ),
+
   storyboard: (id: number) =>
     request<{ storyboard: Storyboard | null }>(
       `/api/v1/episodes/${id}/storyboard`,
