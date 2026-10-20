@@ -185,6 +185,22 @@ _SCENE_ROLES = (
 )
 
 
+def _loads_tolerant(blob):
+    cands = [blob, re.sub(r",\s*([}\]])", r"\1", blob)]
+    try:
+        import ast
+        cands.append(json.dumps(ast.literal_eval(blob)))
+    except (ValueError, SyntaxError):
+        pass
+    for t in cands:
+        try:
+            d, _e = json.JSONDecoder().raw_decode(t)
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            return d
+    raise ValueError("unparseable even after tolerant retries")
+
 def _load_json_object(text: str) -> dict:
     """Tolerant JSON extraction: strips code fences, slices the outermost
     braces, raises RuntimeError (retryable) on anything unparseable."""
@@ -193,7 +209,7 @@ def _load_json_object(text: str) -> dict:
     if start == -1 or end <= start:
         raise RuntimeError("model output contained no JSON object")
     try:
-        data = json.loads(cleaned[start : end + 1])
+        data = _loads_tolerant(cleaned[start : end + 1])
     except ValueError as exc:
         raise RuntimeError(f"model JSON invalid: {exc}") from exc
     if not isinstance(data, dict):
@@ -344,6 +360,7 @@ def handle_storyboard_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict
         _storyboard_prompt(script, n, style),
         system=_JSON_SYSTEM,
         options={"num_ctx": 8192},
+        json_mode=True,
     )
     shots = _parse_shots(result["text"], n)
     stored = _store_storyboard(ctx, ep, style, narrations, shots, "local_ollama")
@@ -468,6 +485,7 @@ def handle_series_outline_gen(payload: dict, job: dict, ctx: HandlerContext) -> 
         _series_prompt(premise, count),
         system=_JSON_SYSTEM,
         options={"num_ctx": 8192},
+        json_mode=True,
     )
     ideas = _parse_ideas(result["text"], count)
     summary = _accept_outline(ctx, int(series["id"]), ideas, "local_ollama")

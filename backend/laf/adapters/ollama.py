@@ -93,6 +93,7 @@ class OllamaAdapter:
         model: str | None = None,
         system: str | None = None,
         options: dict | None = None,
+        json_mode: bool = False,
     ) -> dict:
         """Non-streaming /api/generate call. Returns the text plus honest
         metadata. Raises AdapterUnavailable when the daemon is unreachable
@@ -106,6 +107,8 @@ class OllamaAdapter:
             # field. Keep the post-hoc strip as belt-and-braces.
             "think": False,
         }
+        if json_mode:
+            body["format"] = "json"
         if system:
             body["system"] = system
         if options:
