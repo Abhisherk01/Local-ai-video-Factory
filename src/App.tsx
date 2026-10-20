@@ -25,7 +25,7 @@ export default function App() {
 
     function describe(error: unknown): string {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("unreachable")) {
+      if (message.includes("unreachable") || message.includes("backend starting")) {
         return (
           "The backend process did not come up within 30 seconds. " +
           "Check that Python 3.12 exists (py -3.12 -V), that the repo venv " +

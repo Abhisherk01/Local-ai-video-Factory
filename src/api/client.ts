@@ -62,7 +62,19 @@ export async function resolveBackend(): Promise<ResolvedBackend> {
     throw new Error(info.message);
   }
 
-  // Browser dev fallback (Vite proxy adds the token header).
+  // Inside Tauri but the backend is not ready yet: fail retryably (App
+  // re-polls every 800 ms). Never fall through to the dev proxy here - the
+  // proxy targets the fixed LAF_PORT (8756) used by plain browser dev,
+  // while the shell starts the backend on a random port. Caching the proxy
+  // route during the "starting" window poisoned the session with endless
+  // ECONNREFUSED (surfacing as "Backend failed to start: 500:") even after
+  // the backend became healthy on its real port.
+  if (info?.state === "starting") {
+    throw new Error("backend starting");
+  }
+
+  // Browser dev fallback (Vite proxy adds the token header). Reached only
+  // when NOT running inside the Tauri shell (invoke unavailable).
   cached = { base: "/laf-api", token: "", proxied: true };
   return cached;
 }
