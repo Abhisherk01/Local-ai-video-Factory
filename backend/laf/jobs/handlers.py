@@ -18,6 +18,7 @@ Method labels are honest by design (ADR-010):
 - series_outline_fallback -> method "fallback_angles"
 - tts_render         -> method "local_piper"   (or fallback tone)
 - tts_fallback       -> method "fallback_tone"
+- video_render       -> method "local_piper"   (or fallback tone)
 """
 
 from __future__ import annotations
@@ -75,20 +76,97 @@ class HandlerContext:
 
 Handler = Callable[[dict, dict, HandlerContext], dict]
 
+# Phase 6a.2: qwen3 plain-text planning guard. Field evidence: the stored
+# "scripts" of ep3/6/7/9/10 ARE the reasoning (15K/20K/2.2K/23K/2.4K chars
+# for a 150-word target).
+# 0.4.2 precision move: "we are writing"/"below is" are HEAD-only now.
+# Every field-observed leak OPENS with its marker, so head-only keeps the
+# full true-positive catch; but a narration sentence like "we are writing
+# history with every frame" inside the first 400 chars can be legitimate -
+# and a false positive burns ALL three attempts (job #39 went 0/3, ep11
+# stayed empty).
+_META_ANYWHERE = ("the user wants", "as requested")
+_META_HEAD = (
+    "okay,",
+    "okay ",
+    "i need to",
+    "i will write",
+    "i'll write",
+    "let me write",
+    "we are writing",
+    "below is",
+)
+
+
+def looks_like_meta_text(text: str) -> bool:
+    """Detect planning chatter in a supposedly-final narration script.
+
+    qwen3:4b opens replies with prompt-echo planning ("We are writing...",
+    "Okay, the user wants me to...") and ignores the word budget. The
+    system prompt alone does not stop it (ep9 proves that), so the head
+    is checked against observed meta openers and flagged; the handler
+    turns a flag into a retryable error so the queue re-rolls the model.
+    Precision-first: a false positive costs one auto-retry, a false
+    negative stores chatter as narration.
+    """
+    head = text[:120].lower().lstrip()
+    if head.startswith(_META_HEAD):
+        return True
+    first = text[:400].lower()
+    return any(op in first for op in _META_ANYWHERE)
+
+
+# 0.4.3: script_gen joins the JSON-grammar club. Field evidence across
+# three patch generations:
+# - 0.4.1 free-text: qwen3 opened with ~2.1K chars of plain-text plan-
+#   chatter ("Okay, the user wants...") even with think=False + /no_think
+#   + tightened instructions; identical retries went 0/3 (job #39).
+# - 0.4.2 few-shot demo: the example got PARROTED as the script (job #41
+#   attempt 1-2 -> the anti-copy sentinel caught it, but the attempts
+#   were burned).
+# - storyboard/series with format:"json" (grammar-constrained decoding)
+#   succeed on the same model: prose openers are structurally impossible
+#   under the JSON grammar. So narration is now requested as JSON and
+#   reassembled; the 6a.2 guard still applies to the assembled text
+#   because chatter can ride inside string values.
 _SCRIPT_SYSTEM = (
     "You write short-form vertical video narration scripts. "
-    "Output ONLY the narration script as plain text: one HOOK line, "
-    "3-5 BODY sentences, one CTA line. No markdown, no headings, no "
-    "stage directions, no emojis."
+    'Output ONLY valid JSON: {"hook": <one attention-grabbing line that '
+    'names the topic>, "body": <array of 3-5 short narration sentences>, '
+    '"cta": <one closing line asking the viewer to follow>}. '
+    "No markdown fences, no commentary, no notes."
 )
+
+
+def _script_from_json(blob: str) -> str:
+    """Reassemble plain narration from the model's JSON fields.
+
+    Raises RuntimeError (retryable) when no JSON object can be recovered
+    or when the object carries no narration at all."""
+    data = _load_json_object(blob)
+    hook = str(data.get("hook") or "").strip()
+    body = data.get("body") or []
+    if isinstance(body, str):
+        body = [body]
+    elif isinstance(body, (list, tuple)):
+        body = list(body)
+    else:
+        body = [str(body)]
+    cta = str(data.get("cta") or "").strip()
+    lines = [hook] + [str(s).strip() for s in body] + [cta]
+    text = "\n".join(line for line in lines if line)
+    if not text:
+        raise RuntimeError("script JSON contained no narration fields")
+    return text
 
 
 def _script_prompt(topic: str, target_words: int) -> str:
     return (
         f"Topic: {topic}\n"
-        f"Write a narration script for a ~60 second vertical video "
-        f"(about {target_words} words). Start with a hook that names "
-        f"the topic, then the body, end with a call to action."
+        f"Write the narration for a ~60 second vertical video (about "
+        f"{target_words} words total across hook, body and cta). "
+        f"Respond with only the JSON object described in the system "
+        f"prompt."
     )
 
 
@@ -144,12 +222,41 @@ def handle_script_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
             }
         raise PrereqMissing(f"ollama_unavailable: {status.detail}")
 
+    # 0.4.2: identical retries are correlated retries - #39 went 0/3 on
+    # the same prompt + params. Each attempt re-rolls the sampler:
+    # 0.6 compliance-first baseline, 1.0 escapes attempt 1's attractor,
+    # 0.3 near-deterministic final roll.
+    attempt = max(1, int(job.get("attempts") or 1))
+    temperature = {1: 0.6, 2: 1.0, 3: 0.3}.get(attempt, 0.6)
     result = ollama.generate(
-        _script_prompt(topic, target_words), system=_SCRIPT_SYSTEM
+        _script_prompt(topic, target_words),
+        system=_SCRIPT_SYSTEM,
+        # 512 tok ≈ 2x the 150-word target. Bounds a runaway attempt to
+        # ~1-2 min even on a partially-CPU-offloaded daemon (34%/66%
+        # split class) instead of a blind 600 s timeout (jobs #33/#34).
+        num_predict=512,
+        # 0.4.3: grammar-constrained decoding - the same mechanism that
+        # fixed storyboard/series on this model. Prose openers cannot
+        # lead the output anymore; chatter may only ride inside JSON
+        # string values, where the guard below still catches it.
+        json_mode=True,
+        options={"temperature": temperature, "top_p": 0.9},
     )
     if not result["text"]:
         raise RuntimeError("ollama returned an empty script")
-    _store_script(ctx, job, result["text"], result["method"])
+    text = _script_from_json(result["text"])
+    if looks_like_meta_text(text) or len(text.split()) > target_words * 3:
+        # Phase 6a.2 field lesson (ep3/6/7/9/10): chatter inside JSON
+        # values still counts. 0.4.2: the error carries the opening of
+        # the rejected text so the failure self-describes in
+        # verify_db.py output.
+        head = " ".join(text[:200].split())
+        raise RuntimeError(
+            "ollama returned meta/bloated script text "
+            f"({len(text)} chars, {len(text.split())} words) - retrying; "
+            f"head: {head!r}"
+        )
+    _store_script(ctx, job, text, result["method"])
     return {
         "method": result["method"],
         "model": result["model"],
@@ -192,21 +299,34 @@ _SCENE_ROLES = (
 )
 
 
-def _loads_tolerant(blob):
-    cands = [blob, re.sub(r",\s*([}\]])", r"\1", blob)]
+def _loads_tolerant(blob: str) -> dict:
+    """Recover the model's JSON from common qwen3 sloppiness.
+
+    Field-observed failure modes (jobs #14/#15/#18): single-quoted
+    strings/keys ("Expecting value: line 1 column 12"), trailing commas
+    ("Expecting property name enclosed in double quotes"), and a complete
+    object followed by extra drafts ("Extra data: ..."). raw_decode()
+    takes the first complete object and ignores trailing data;
+    literal_eval rebuilds Python-literal syntax; the comma strip removes
+    dangling commas. Raises ValueError (retryable upstream) when nothing
+    works.
+    """
+    candidates = [blob, re.sub(r",\s*([}\]])", r"\1", blob)]
     try:
         import ast
-        cands.append(json.dumps(ast.literal_eval(blob)))
+
+        candidates.append(json.dumps(ast.literal_eval(blob)))
     except (ValueError, SyntaxError):
         pass
-    for t in cands:
+    for text in candidates:
         try:
-            d, _e = json.JSONDecoder().raw_decode(t)
+            data, _end = json.JSONDecoder().raw_decode(text)
         except ValueError:
             continue
-        if isinstance(d, dict):
-            return d
+        if isinstance(data, dict):
+            return data
     raise ValueError("unparseable even after tolerant retries")
+
 
 def _load_json_object(text: str) -> dict:
     """Tolerant JSON extraction: strips code fences, slices the outermost
@@ -366,7 +486,11 @@ def handle_storyboard_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict
     result = ollama.generate(
         _storyboard_prompt(script, n, style),
         system=_JSON_SYSTEM,
-        options={"num_ctx": 8192},
+        # num_ctx 4096 (was 8192): prompt + shots JSON fit in ~1-2K
+        # tokens, and the smaller window halves KV-cache VRAM - on a
+        # 4-6 GB GPU that difference decides 100% vs partial CPU/GPU
+        # offload, i.e. a 4-6x decode speed change.
+        options={"num_ctx": 4096},
         json_mode=True,
     )
     shots = _parse_shots(result["text"], n)
@@ -492,7 +616,8 @@ def handle_series_outline_gen(payload: dict, job: dict, ctx: HandlerContext) -> 
     result = ollama.generate(
         _series_prompt(premise, count),
         system=_JSON_SYSTEM,
-        options={"num_ctx": 8192},
+        # Same num_ctx rationale as storyboard_gen (KV-cache VRAM).
+        options={"num_ctx": 4096},
         json_mode=True,
     )
     ideas = _parse_ideas(result["text"], count)
@@ -601,10 +726,6 @@ def _render_tone(rate: int, seconds: float, freq: float = 220.0) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# registry
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # video render (Phase 5)
 # ---------------------------------------------------------------------------
 
@@ -654,6 +775,10 @@ def handle_video_render(payload: dict, job: dict, ctx: HandlerContext) -> dict:
     set_episode_status(ctx.conn, int(episode_id), "rendered")
     return result
 
+
+# ---------------------------------------------------------------------------
+# registry
+# ---------------------------------------------------------------------------
 
 JOB_HANDLERS: dict[str, Handler] = {
     "script_gen": handle_script_gen,

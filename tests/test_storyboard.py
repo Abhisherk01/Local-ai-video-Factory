@@ -165,10 +165,13 @@ def test_storyboard_gen_parses_model_shots_and_stores(env, fake_ollama) -> None:
     assert result["scene_count"] == n
     stored = get_storyboard(env.conn, ep["id"])
     assert "steam rising" in stored["scenes"][0]["visual_prompt"]
-    # The request asked for thinking-off and a wider context window.
+    # The request asked for thinking-off and a bounded context window:
+    # 4096 halves KV-cache VRAM vs 8192 (GPU offload %), and num_predict
+    # must be the bounded adapter default, never -1 (job #34 runaway).
     body = fake_ollama.seen_bodies[0]
     assert body["think"] is False
-    assert body["options"]["num_ctx"] == 8192
+    assert body["options"]["num_ctx"] == 4096
+    assert body["options"]["num_predict"] == 1536
 
 
 def test_storyboard_gen_tolerates_markdown_fences(env, fake_ollama) -> None:

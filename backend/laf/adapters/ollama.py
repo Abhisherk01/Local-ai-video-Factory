@@ -8,6 +8,8 @@ Environment overrides:
 - LAF_OLLAMA_URL   (default http://127.0.0.1:11434)
 - LAF_OLLAMA_MODEL (default qwen3:4b - the Tier-3 pin from Phase 0)
 - LAF_OLLAMA_TIMEOUT (generate timeout seconds, default 600)
+- LAF_OLLAMA_NUM_PREDICT (hard output-token cap, default 1536)
+- LAF_OLLAMA_KEEP_ALIVE (model residency after a call, default "30m")
 
 qwen3 emits `<think>...</think>` reasoning blocks by default; narration
 consumers never want them, so `generate()` requests thinking disabled at
@@ -50,6 +52,12 @@ def strip_think(raw: str) -> tuple[str, bool, bool]:
     if idx != -1:
         text = text[:idx]
         truncated = True
+    if "</think>" in text:
+        # Orphan closer (no opener): survives both the closed-block
+        # regex and the unclosed-cut. Field evidence: post-6a.1 ep9
+        # still carried a tag fragment in stored text.
+        text = text.replace("</think>", "")
+        stripped = True
     return text.strip(), (stripped or truncated), truncated
 
 
@@ -80,6 +88,22 @@ class OllamaAdapter:
         self.generate_timeout_s = generate_timeout_s if generate_timeout_s is not None else float(
             os.environ.get("LAF_OLLAMA_TIMEOUT", "600")
         )
+        # Hard output cap. num_predict=-1 (the phase-4 setting) removed
+        # every ceiling, and qwen3's stochastic ramble mode then filled
+        # the WHOLE context window: field signature was a non-streaming
+        # 600 s timeout with zero bytes returned while the daemon kept
+        # decoding (23 K chars generated inside one timed-out attempt;
+        # job #34: three consecutive blind timeouts on a fresh daemon).
+        # 1536 covers every current consumer (script ~350, storyboard
+        # JSON ~400, 20-idea series outline ~1200 tokens) and bounds the
+        # worst case to minutes, not timeouts, even at partial CPU/GPU
+        # offload. CPU-only owners can tighten via LAF_OLLAMA_NUM_PREDICT.
+        self.num_predict = int(os.environ.get("LAF_OLLAMA_NUM_PREDICT", "1536"))
+        # Keep the model resident between back-to-back jobs: Ollama's
+        # default 5 m keep_alive unloads it mid-session, and every cold
+        # reload re-pays load_duration on exactly the machines that can
+        # least afford it ("4 minutes from now" churn in the field).
+        self.keep_alive = os.environ.get("LAF_OLLAMA_KEEP_ALIVE", "30m")
 
     # ------------------------------------------------------------------
     # availability
@@ -125,6 +149,7 @@ class OllamaAdapter:
         system: str | None = None,
         options: dict | None = None,
         json_mode: bool = False,
+        num_predict: int | None = None,
     ) -> dict:
         """Non-streaming /api/generate call. Returns the text plus honest
         metadata. Raises AdapterUnavailable when the daemon is unreachable
@@ -138,12 +163,28 @@ class OllamaAdapter:
             # field. Keep the post-hoc strip as belt-and-braces.
             "think": False,
         }
+        body["keep_alive"] = self.keep_alive
         if json_mode:
+            # Grammar-constrained decoding: the daemon's sampler may only
+            # emit grammar-valid JSON tokens, so single quotes, trailing
+            # commas and prose drafts become impossible at the source
+            # (field failures #14/#15/#18/#19 all parsed post-hoc before
+            # this; now they cannot be generated at all).
             body["format"] = "json"
         if system:
             body["system"] = system
-        if options:
-            body["options"] = options
+        # num_predict MUST be pinned - but BOUNDED, not -1. Ollama's
+        # documented default (128) truncates storyboard/series JSON
+        # mid-structure and silently clips scripts to ~90 words; -1
+        # removes every ceiling and lets a qwen3 runaway decode until the
+        # context window fills (see __init__ field evidence). Callers may
+        # tighten further per call (script_gen passes 512).
+        opts = dict(options or {})
+        opts.setdefault(
+            "num_predict",
+            self.num_predict if num_predict is None else int(num_predict),
+        )
+        body["options"] = opts
         req = urllib.request.Request(  # noqa: S310 - local, user-configured
             f"{self.base_url}/api/generate",
             data=json.dumps(body).encode("utf-8"),
@@ -162,6 +203,14 @@ class OllamaAdapter:
 
         raw = str(data.get("response", ""))
         text, stripped, truncated = strip_think(raw)
+        # Honest performance metadata: eval_count / tokens_per_s make a
+        # GPU->CPU offload regression (34%/66% split class) visible in job
+        # records, instead of diagnosable only via hand-run probes.
+        eval_count = data.get("eval_count")
+        eval_duration = data.get("eval_duration")
+        tokens_per_s = None
+        if eval_count and eval_duration:
+            tokens_per_s = round(eval_count / (eval_duration / 1e9), 2)
         return {
             "text": text,
             "raw_chars": len(raw),
@@ -170,4 +219,9 @@ class OllamaAdapter:
             "model": body["model"],
             "method": "local_ollama",
             "total_duration_ns": data.get("total_duration"),
+            "load_duration_ns": data.get("load_duration"),
+            "prompt_eval_count": data.get("prompt_eval_count"),
+            "eval_count": eval_count,
+            "eval_duration_ns": eval_duration,
+            "tokens_per_s": tokens_per_s,
         }

@@ -146,3 +146,15 @@ def test_strip_think_clean_text_untouched() -> None:
 def test_no_think_switch_only_for_qwen3() -> None:
     assert effective_prompt("Write it.", "qwen3:4b").endswith("/no_think")
     assert effective_prompt("Write it.", "llama3:8b") == "Write it."
+
+
+def test_strip_think_orphan_closer_removed() -> None:
+    text, stripped, truncated = strip_think("A</think>B")
+    assert text == "AB"
+    assert stripped is True and truncated is False
+
+
+def test_strip_think_closed_then_orphan() -> None:
+    text, stripped, truncated = strip_think("<think>x</think>Keep</think>")
+    assert text == "Keep"
+    assert stripped is True and truncated is False
