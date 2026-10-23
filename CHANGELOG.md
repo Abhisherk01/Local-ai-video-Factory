@@ -162,3 +162,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - `video_render` + `tts_render` resolve the voice at run time from the
   job payload; a vanished voice file falls back to the adapter default
   and the result says which voice was used.
+
+## 0.4.6 - UI info: episode numbers, Info panel, queue ep tags, overlap fix
+
+### Added
+- Episode rows carry an `ep<id>` chip, so the episode number is
+  visible at every stage - not only after the first render.
+- Per-episode Info button (shows Hide info while open): a compact
+  detail panel with status, created/updated stamps, full topic,
+  script size + method + 90-char preview, the latest job per stage
+  (script / storyboard / render), the selected style and voice, and
+  the render output line.
+- A queued or running storyboard job now surfaces on its episode row
+  (the script and render lines already did).
+
+### Fixed
+- Job-queue rows never showed their episode: the `ep <id>` chip sat
+  behind a dead condition - `jobById.has(job.id) === false` is always
+  false for a job that IS in the map. Queue rows now render
+  `ep<id> - <title>` for every job, queued ones included.
+- Episode rows no longer overlap on narrow windows: the control
+  cluster (style + voice + buttons) moved to its own wrapping line
+  instead of a `shrink-0` right-hand cluster that overflowed the
+  max-w-3xl card and painted over the next row.

@@ -50,6 +50,30 @@ function jobTone(status: string): StatusChipProps["tone"] {
   }
 }
 
+// 0.4.6: compact helpers for the Info panel + job-queue ep tags.
+function shortText(s: string, n: number): string {
+  const t = s.trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+function fmtWhen(iso: string): string {
+  return iso ? iso.slice(0, 16).replace("T", " ") : "";
+}
+
+function stageJobSummary(
+  scriptJob: PipelineJob | undefined,
+  storyboardJob: PipelineJob | undefined,
+  renderJob: PipelineJob | undefined,
+): string {
+  const part = (label: string, job?: PipelineJob) =>
+    job ? `${label} #${job.id} ${job.status}` : `${label} -`;
+  return [
+    part("script", scriptJob),
+    part("story", storyboardJob),
+    part("render", renderJob),
+  ].join(" | ");
+}
+
 function AdapterChip({ probe }: { probe: AdapterProbe }) {
   const short = probe.available ? probe.name : `${probe.name} off`;
   return (
@@ -103,6 +127,8 @@ export default function Pipeline({ version }: PipelineProps) {
   const [seriesCount, setSeriesCount] = useState(20);
   const [planOpenFor, setPlanOpenFor] = useState<number | null>(null);
   const [planKey, setPlanKey] = useState(0);
+  // 0.4.6: per-episode Info panel (short process detail).
+  const [infoOpenFor, setInfoOpenFor] = useState<number | null>(null);
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState("");
   const [busy, setBusy] = useState(false);
@@ -251,7 +277,10 @@ export default function Pipeline({ version }: PipelineProps) {
     }
   }
 
-  const jobById = new Map(jobs.map((j) => [j.id, j]));
+  // 0.4.6: episode lookup for job-queue ep tags. (The old jobById map was
+  // dead code: `jobById.has(job.id) === false` is never true for a job that
+  // IS in the map, which is why ep numbers never showed in the queue.)
+  const epById = new Map(episodes.map((e) => [e.id, e]));
 
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-6 py-8">
@@ -322,7 +351,7 @@ export default function Pipeline({ version }: PipelineProps) {
         <div className="flex items-center justify-between">
           <h2 className="text-section text-ink">Episodes</h2>
           <span className="font-mono text-caption text-ink-mute">
-            {episodes.length} - picker v2
+            {episodes.length} - info v4
           </span>
         </div>
         {episodes.length === 0 ? (
@@ -339,6 +368,9 @@ export default function Pipeline({ version }: PipelineProps) {
               const renderJob = jobs.find(
                 (j) => j.episode_id === ep.id && j.type.startsWith("video"),
               );
+              const storyboardJob = jobs.find(
+                (j) => j.episode_id === ep.id && j.type.startsWith("storyboard"),
+              );
               const mp4 =
                 renderJob && renderJob.status === "succeeded"
                   ? renderJob.result
@@ -352,12 +384,21 @@ export default function Pipeline({ version }: PipelineProps) {
               const planReady = ep.status === "storyboarded" || ep.status === "rendered";
               return (
                 <li key={ep.id} className="flex flex-col gap-1 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-body2 text-ink">
-                          {ep.title}
-                        </span>
+                  {/* 0.4.6 overlap fix: title line and controls line are now
+                     SIBLINGS stacked in the <li> - the old single flex row
+                     had a shrink-0 control cluster (2 selects + 5 buttons)
+                     that overflowed the max-w-3xl card and painted over the
+                     next row on narrow windows. */}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="shrink-0 rounded border border-line-subtle bg-base px-1.5 py-0.5 font-mono text-caption text-ink-mute"
+                      title={`Episode database id ${ep.id}`}
+                    >
+                      ep{ep.id}
+                    </span>
+                    <span className="truncate text-body2 text-ink">
+                      {ep.title}
+                    </span>
                         <StatusChip
                           tone={statusTone(ep.status)}
                           label={ep.status}
@@ -372,12 +413,11 @@ export default function Pipeline({ version }: PipelineProps) {
                             series {ep.series_id}
                           </span>
                         )}
-                      </div>
-                      <p className="mt-0.5 truncate text-caption text-ink-mute">
-                        {ep.topic}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  </div>
+                  <p className="mt-0.5 truncate text-caption text-ink-mute">
+                    {ep.topic}
+                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
                       <select
                         className="rounded-md border border-line-subtle bg-base px-2 py-1.5 font-mono text-caption text-ink-dim"
                         value={styleByEp[ep.id] ?? "dark_cinematic"}
@@ -450,6 +490,15 @@ export default function Pipeline({ version }: PipelineProps) {
                       )}
                       <button
                         className={btnGhost}
+                        onClick={() =>
+                          setInfoOpenFor(infoOpenFor === ep.id ? null : ep.id)
+                        }
+                        title="Episode details: stage status, last jobs per stage, script size, render output"
+                      >
+                        {infoOpenFor === ep.id ? "Hide info" : "Info"}
+                      </button>
+                      <button
+                        className={btnGhost}
                         disabled={busy}
                         onClick={() => void renderEpisode(ep)}
                         title="Render the finished 9:16 MP4 with the selected voice (piper when installed, tone placeholder otherwise). Re-running overwrites with the new voice."
@@ -465,11 +514,16 @@ export default function Pipeline({ version }: PipelineProps) {
                         Delete
                       </button>
                     </div>
-                  </div>
                   {scriptJob && scriptJob.status !== "succeeded" && (
                     <p className="font-mono text-caption text-ink-mute">
                       job #{scriptJob.id} {scriptJob.status}
                       {scriptJob.error ? ` - ${scriptJob.error}` : ""}
+                    </p>
+                  )}
+                  {storyboardJob && storyboardJob.status !== "succeeded" && (
+                    <p className="font-mono text-caption text-ink-mute">
+                      storyboard job #{storyboardJob.id} {storyboardJob.status}
+                      {storyboardJob.error ? ` - ${storyboardJob.error}` : ""}
                     </p>
                   )}
                   {renderJob && renderJob.status !== "succeeded" && (
@@ -484,6 +538,49 @@ export default function Pipeline({ version }: PipelineProps) {
                       {mp4Dur != null ? ` (${mp4Dur.toFixed(1)}s)` : ""}
                       {mp4Voice ? ` - voice: ${mp4Voice}` : ""}
                     </p>
+                  )}
+                  {infoOpenFor === ep.id && (
+                    <div className="rounded-md border border-line-subtle bg-base px-3 py-2">
+                      <div className="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1 text-caption text-ink-dim">
+                        <span className="text-ink-mute">episode</span>
+                        <span className="font-mono">
+                          ep{ep.id} - {ep.status}
+                        </span>
+                        <span className="text-ink-mute">created / updated</span>
+                        <span className="font-mono">
+                          {fmtWhen(ep.created_at)} / {fmtWhen(ep.updated_at)}
+                        </span>
+                        <span className="text-ink-mute">topic</span>
+                        <span>{ep.topic}</span>
+                        <span className="text-ink-mute">script</span>
+                        <span>
+                          {ep.script_text
+                            ? `${ep.script_text.length} chars via ${
+                                ep.script_method ?? "n/a"
+                              } - "${shortText(ep.script_text, 90)}"`
+                            : "none yet (run Script)"}
+                        </span>
+                        <span className="text-ink-mute">stage jobs</span>
+                        <span className="font-mono">
+                          {stageJobSummary(scriptJob, storyboardJob, renderJob)}
+                        </span>
+                        <span className="text-ink-mute">style / voice</span>
+                        <span className="font-mono">
+                          {styleByEp[ep.id] ?? "dark_cinematic"} /{" "}
+                          {voiceByEp[ep.id] ?? "auto"}
+                        </span>
+                        <span className="text-ink-mute">output</span>
+                        <span className="font-mono">
+                          {mp4Path
+                            ? `mp4 ${mp4Dur != null ? `${mp4Dur.toFixed(1)}s` : ""}${
+                                mp4Voice ? ` - ${mp4Voice}` : ""
+                              }`
+                            : renderJob && renderJob.status !== "succeeded"
+                              ? `render job #${renderJob.id} ${renderJob.status}`
+                              : "not rendered yet (Storyboard, then Render)"}
+                        </span>
+                      </div>
+                    </div>
                   )}
                   {planOpenFor === ep.id && (
                     <StoryboardPanel episodeId={ep.id} refreshKey={planKey} />
@@ -642,9 +739,12 @@ export default function Pipeline({ version }: PipelineProps) {
                         attempt {job.attempts}/{job.max_attempts}
                       </span>
                     )}
-                    {job.episode_id !== null && jobById.has(job.id) === false && (
+                    {job.episode_id !== null && (
                       <span className="font-mono text-caption text-ink-mute">
-                        ep {job.episode_id}
+                        ep{job.episode_id}
+                        {epById.get(job.episode_id)?.title
+                          ? ` - ${shortText(epById.get(job.episode_id)!.title, 22)}`
+                          : ""}
                       </span>
                     )}
                   </div>

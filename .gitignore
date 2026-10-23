@@ -79,3 +79,5 @@ desktop.ini
 !.vscode/extensions.json
 
 INSTALL.txt
+
+*.bak_*
