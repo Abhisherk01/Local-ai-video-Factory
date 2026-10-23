@@ -109,9 +109,20 @@ class PiperAdapter:
     # synthesis
     # ------------------------------------------------------------------
 
-    def synthesize(self, text: str, out_path: Path, *, voice: Path | None = None) -> dict:
+    def synthesize(
+        self,
+        text: str,
+        out_path: Path,
+        *,
+        voice: Path | None = None,
+        length_scale: float | None = None,
+    ) -> dict:
         """Render `text` to a WAV file. Raises AdapterUnavailable with a
-        fix-it message when piper/voice are missing or the CLI fails."""
+        fix-it message when piper/voice are missing or the CLI fails.
+
+        `length_scale` (0.4.5): piper's speech-rate dial (>1 slower and
+        more measured, <1 faster and brighter). None keeps the model's
+        own default - the pre-0.4.5 command line is unchanged."""
         exe = self.resolve_exe()
         if not exe:
             raise AdapterUnavailable("piper executable not found (see /api/v1/adapters)")
@@ -122,6 +133,8 @@ class PiperAdapter:
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         cmd = [exe, "--model", str(voice_path), "--output_file", str(out_path)]
+        if length_scale is not None:
+            cmd += ["--length-scale", f"{float(length_scale):.3f}"]
         try:
             proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
                 cmd,

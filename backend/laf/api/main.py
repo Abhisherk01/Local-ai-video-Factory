@@ -21,6 +21,7 @@ from laf.api.routes import (
     settings,
     styles,
     system,
+    voices,
 )
 from laf.api.state import AppState
 from laf.config import resolve_runtime
@@ -125,4 +126,5 @@ def create_app(
     app.include_router(series.router)
     app.include_router(jobs.router)
     app.include_router(adapters.router)
+    app.include_router(voices.router)
     return app

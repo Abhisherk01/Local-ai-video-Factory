@@ -9,6 +9,7 @@ import type {
   PipelineJob,
   SeriesInfo,
   StyleInfo,
+  VoiceInfo,
 } from "../api/types";
 import StoryboardPanel from "../components/StoryboardPanel";
 import StatusChip from "../components/StatusChip";
@@ -92,6 +93,10 @@ export default function Pipeline({ version }: PipelineProps) {
   // episode's Storyboard was clicked). Keyed by episode id; each defaults
   // to dark_cinematic, which the seeded registry always provides.
   const [styleByEp, setStyleByEp] = useState<Record<number, string>>({});
+  // 0.4.5: per-episode narration voice. "auto" = the adapter's default
+  // piper voice - the pre-0.4.5 behaviour, byte-identical renders.
+  const [voices, setVoices] = useState<VoiceInfo[]>([]);
+  const [voiceByEp, setVoiceByEp] = useState<Record<number, string>>({});
   const [series, setSeries] = useState<SeriesInfo[]>([]);
   const [seriesName, setSeriesName] = useState("");
   const [seriesPremise, setSeriesPremise] = useState("");
@@ -106,12 +111,13 @@ export default function Pipeline({ version }: PipelineProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const [ep, js, ad, st, se] = await Promise.all([
+      const [ep, js, ad, st, se, vo] = await Promise.all([
         api.episodes(),
         api.jobs(),
         api.adapters(),
         api.styles(),
         api.series(),
+        api.voices(),
       ]);
       if (!aliveRef.current) return;
       setEpisodes(ep.episodes);
@@ -120,6 +126,7 @@ export default function Pipeline({ version }: PipelineProps) {
       setWorkerRunning(ad.worker.running);
       setStyles(st.styles);
       setSeries(se.series);
+      setVoices(vo.voices);
       const statsBody: JobsStatsInfo = await api.jobStats();
       if (aliveRef.current) setStats(statsBody.stats);
       setError(null);
@@ -187,7 +194,11 @@ export default function Pipeline({ version }: PipelineProps) {
   async function renderEpisode(ep: Episode) {
     setBusy(true);
     try {
-      await api.requestRender(ep.id, { allow_fallback: true });
+      const vs = voiceByEp[ep.id];
+      await api.requestRender(ep.id, {
+        allow_fallback: true,
+        ...(vs && vs !== "auto" ? { voice_slug: vs } : {}),
+      });
       await refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -336,8 +347,9 @@ export default function Pipeline({ version }: PipelineProps) {
                 mp4 && typeof mp4.path === "string" ? mp4.path : null;
               const mp4Dur =
                 mp4 && typeof mp4.duration_s === "number" ? mp4.duration_s : null;
-              const planReady =
-                ep.status === "storyboarded" || ep.status === "rendered";
+              const mp4Voice =
+                mp4 && typeof mp4.voice === "string" ? mp4.voice : null;
+              const planReady = ep.status === "storyboarded" || ep.status === "rendered";
               return (
                 <li key={ep.id} className="flex flex-col gap-1 py-3">
                   <div className="flex items-center justify-between gap-3">
@@ -386,22 +398,42 @@ export default function Pipeline({ version }: PipelineProps) {
                           </option>
                         ))}
                       </select>
+                      <select
+                        className="rounded-md border border-line-subtle bg-base px-2 py-1.5 font-mono text-caption text-ink-dim"
+                        value={voiceByEp[ep.id] ?? "auto"}
+                        title={
+                          voices.length === 0
+                            ? "No piper voices installed yet - the render falls back to the default. Add voices with scripts\\add_voice.ps1"
+                            : `Narration voice for Render. ${voices.length} installed; add more with scripts\\add_voice.ps1`
+                        }
+                        onChange={(e) =>
+                          setVoiceByEp((m) => ({
+                            ...m,
+                            [ep.id]: e.target.value,
+                          }))
+                        }
+                      >
+                        <option value="auto">Auto voice</option>
+                        {voices.map((v) => (
+                          <option key={v.slug} value={v.slug}>
+                            {v.name} - {v.gender}
+                            {v.custom ? " (custom)" : ""}
+                          </option>
+                        ))}
+                      </select>
                       <button
                         className={btnGhost}
-                        disabled={busy || ep.status !== "draft"}
+                        disabled={busy}
                         onClick={() => void scriptEpisode(ep, "auto")}
-                        title="Queue a script job (Ollama when installed, template fallback otherwise)"
+                        title="Queue a script job (Ollama when installed, template fallback otherwise). Re-running replaces the stored script."
                       >
                         Script
                       </button>
                       <button
                         className={btnGhost}
-                        disabled={
-                          busy ||
-                          (ep.status !== "scripted" && ep.status !== "storyboarded")
-                        }
+                        disabled={busy}
                         onClick={() => void storyboardEpisode(ep)}
-                        title="Split the script into scenes with per-scene visual prompts"
+                        title="Split the script into scenes with per-scene visual prompts. Re-running replaces the scene plan."
                       >
                         Storyboard
                       </button>
@@ -418,12 +450,9 @@ export default function Pipeline({ version }: PipelineProps) {
                       )}
                       <button
                         className={btnGhost}
-                        disabled={
-                          busy ||
-                          (ep.status !== "storyboarded" && ep.status !== "rendered")
-                        }
+                        disabled={busy}
                         onClick={() => void renderEpisode(ep)}
-                        title="Render the finished 9:16 MP4 (piper voice when installed, tone placeholder otherwise)"
+                        title="Render the finished 9:16 MP4 with the selected voice (piper when installed, tone placeholder otherwise). Re-running overwrites with the new voice."
                       >
                         Render
                       </button>
@@ -453,6 +482,7 @@ export default function Pipeline({ version }: PipelineProps) {
                     <p className="truncate font-mono text-caption text-success">
                       mp4: {mp4Path}
                       {mp4Dur != null ? ` (${mp4Dur.toFixed(1)}s)` : ""}
+                      {mp4Voice ? ` - voice: ${mp4Voice}` : ""}
                     </p>
                   )}
                   {planOpenFor === ep.id && (

@@ -140,3 +140,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - Hardware probe executed on the build machine: Windows 11 Home (build 26300), i5-12450H, 15.7 GB RAM, RTX 2050 4 GB, 37 GB free disk, 12 Mbit/s down.
 - Verdict: Tier 3 (GPU-lean). Full report in `docs/PHASE0-HARDWARE-ASSESSMENT.md`.
 - Owner approved the Tier-3 plan, the ~6–8 GB core model set, and the disk-cleanup gate (≥ 60 GB free before Phase 3 installs).
+
+## 0.4.5 - Voices: per-episode narration voice picker
+
+### Added
+- Piper voice registry (`laf.voices`): ten curated, download-verified
+  en_US/en_GB voices (5 female, 5 male) with honest metadata and a
+  per-voice delivery preset (`length_scale` speech-rate dial - piper
+  has no native emotion parameter; pace/voice choice is the honest
+  lever). Custom on-disk voices are listed too, flagged `custom`.
+- `GET /api/v1/voices` (installed voices + catalog + voices_dir).
+- Render requests accept `voice_slug`; the UI gained a per-episode
+  voice picker next to the style picker. `auto` (the default) keeps
+  the pre-0.4.5 behaviour byte-identical. Unknown slugs are rejected
+  at enqueue with a 400 - no burned job attempts.
+- Render results record the voice actually used (`voice` field);
+  the Pipeline mp4 line and job rows surface it.
+- `scripts/add_voice.ps1`: downloads any catalog voice (both .onnx and
+  .onnx.json) from rhasspy/piper-voices v1.0.0 into
+  `<models_dir>/piper/voices/`, e.g. `scripts\add_voice.ps1 ryan`.
+- `video_render` + `tts_render` resolve the voice at run time from the
+  job payload; a vanished voice file falls back to the adapter default
+  and the result says which voice was used.

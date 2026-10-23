@@ -672,10 +672,17 @@ def render_episode(
     models_dir: Path | None = None,
     width: int = WIDTH,
     height: int = HEIGHT,
+    voice: Path | None = None,
+    length_scale: float | None = None,
 ) -> dict[str, Any]:
     """Render the whole episode. `audio_mode` is "piper" (adapter already
     probed available) or "tone" (honest placeholder). Raises RuntimeError
-    on any ffmpeg/QC failure (retryable job failure)."""
+    on any ffmpeg/QC failure (retryable job failure).
+
+    0.4.5: `voice` selects a specific piper .onnx and `length_scale` the
+    speech-rate preset; both None = the adapter resolves its default
+    voice with the model's own rate - the pre-0.4.5 behaviour. The
+    result records the voice actually used (`voice`, file stem)."""
     if not scenes:
         raise RuntimeError("no scenes to render")
     workdir = Path(workdir)
@@ -693,7 +700,12 @@ def render_episode(
             spoken: float | None = None
             if audio_mode == "piper" and narration and piper is not None:
                 raw = workdir / f"tts_{i:03d}.wav"
-                piper.synthesize(narration, raw)
+                if voice is not None or length_scale is not None:
+                    piper.synthesize(
+                        narration, raw, voice=voice, length_scale=length_scale
+                    )
+                else:
+                    piper.synthesize(narration, raw)
                 spoken = wav_duration_s(raw)
                 audio_path: Path = raw
             else:
@@ -729,6 +741,14 @@ def render_episode(
                 f"{c['name']} ({c['detail']})" for c in qc["checks"] if not c["ok"]
             )
             raise RuntimeError(f"render QC failed: {failed}")
+        used_voice: str | None = None
+        if audio_mode == "piper":
+            resolved = voice
+            if resolved is None and piper is not None and hasattr(
+                piper, "resolve_voice"
+            ):
+                resolved = piper.resolve_voice()
+            used_voice = Path(resolved).stem if resolved else None
         return {
             "method": "local_piper" if audio_mode == "piper" else "fallback_tone",
             "path": str(out_path),
@@ -736,6 +756,7 @@ def render_episode(
             "duration_s": total,
             "scene_count": len(scenes),
             "style_slug": str(style_slug),
+            "voice": used_voice,
             "bed": bed_label,
             "qc": qc,
         }

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from laf import renderer
+from laf import voices
 from laf.adapters import AdapterUnavailable, OllamaAdapter, PiperAdapter
 from laf.dedupe import filter_duplicates
 from laf.episodes import (
@@ -672,12 +673,19 @@ def _episode_script(ctx: HandlerContext, job: dict, payload: dict) -> str:
 def handle_tts_render(payload: dict, job: dict, ctx: HandlerContext) -> dict:
     text = _episode_script(ctx, job, payload)
     piper = PiperAdapter(models_dir=ctx.models_dir)
+    voice_slug = str(payload.get("voice_slug") or "auto")
+    voice_path = voices.resolve_voice_path(ctx.models_dir, voice_slug)
+    voice_scale = (
+        voices.preset_for(voice_slug) if voice_path is not None else None
+    )
     if not piper.available().available:
         if payload.get("allow_fallback"):
             return handle_tts_fallback(payload, job, ctx)
         raise PrereqMissing("piper_unavailable: see /api/v1/adapters for the fix")
     out = _media_dir(ctx) / f"tts_job{job['id']}.wav"
-    result = piper.synthesize(text, out)
+    result = piper.synthesize(
+        text, out, voice=voice_path, length_scale=voice_scale
+    )
     return {
         "method": result["method"],
         "path": result["path"],
@@ -754,6 +762,11 @@ def handle_video_render(payload: dict, job: dict, ctx: HandlerContext) -> dict:
 
     piper = PiperAdapter(models_dir=ctx.models_dir)
     use_piper = piper.available().available
+    voice_slug = str(payload.get("voice_slug") or "auto")
+    voice_path = voices.resolve_voice_path(ctx.models_dir, voice_slug)
+    voice_scale = (
+        voices.preset_for(voice_slug) if voice_path is not None else None
+    )
     if not use_piper and not payload.get("allow_fallback", True):
         raise PrereqMissing("piper_unavailable: see /api/v1/adapters for the fix")
 
@@ -771,6 +784,8 @@ def handle_video_render(payload: dict, job: dict, ctx: HandlerContext) -> dict:
         audio_mode="piper" if use_piper else "tone",
         piper=piper if use_piper else None,
         models_dir=ctx.models_dir,
+        voice=voice_path,
+        length_scale=voice_scale,
     )
     set_episode_status(ctx.conn, int(episode_id), "rendered")
     return result

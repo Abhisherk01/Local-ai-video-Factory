@@ -22,6 +22,7 @@ import type {
   Storyboard,
   StyleInfo,
   SystemPaths,
+  VoicesInfo,
 } from "./types";
 
 interface ResolvedBackend {
@@ -181,6 +182,8 @@ export const api = {
 
   adapters: () => request<AdaptersInfo>("/api/v1/adapters"),
 
+  voices: () => request<VoicesInfo>("/api/v1/voices"),
+
   // -- Phase 4: styles, storyboards, series --------------------------------
 
   styles: () => request<{ styles: StyleInfo[] }>("/api/v1/styles"),
@@ -196,7 +199,7 @@ export const api = {
 
   // -- Phase 5: render -----------------------------------------------------
 
-  requestRender: (id: number, body: { allow_fallback?: boolean }) =>
+  requestRender: (id: number, body: { allow_fallback?: boolean; voice_slug?: string }) =>
     request<{ job: PipelineJob; created: boolean }>(
       `/api/v1/episodes/${id}/render`,
       { method: "POST", json: body },

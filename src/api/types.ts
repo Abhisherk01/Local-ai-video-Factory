@@ -110,6 +110,27 @@ export interface AdaptersInfo {
 }
 
 // ---------------------------------------------------------------------------
+// 0.4.5: voices
+// ---------------------------------------------------------------------------
+
+export interface VoiceInfo {
+  slug: string;
+  name: string;
+  gender: string;
+  quality: string;
+  description: string;
+  length_scale?: number | null;
+  custom?: boolean;
+  installed?: boolean;
+}
+
+export interface VoicesInfo {
+  voices: VoiceInfo[];
+  catalog: VoiceInfo[];
+  voices_dir: string;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 4: styles, storyboards, series
 // ---------------------------------------------------------------------------
 
