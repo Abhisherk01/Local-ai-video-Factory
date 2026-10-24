@@ -81,3 +81,8 @@ desktop.ini
 INSTALL.txt
 
 *.bak_*
+
+/backups_*/
+/files/
+/apply_*.py
+/apply_*_report.txt
