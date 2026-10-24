@@ -37,15 +37,34 @@ FFMPEG = shutil.which("ffmpeg")
 def test_catalog_shape_and_uniqueness() -> None:
     slugs = list(CATALOG)
     assert len(slugs) == len(set(slugs))
-    assert len(slugs) == 10  # 5 female + 5 male, all download-verified
+    assert len(slugs) == 12  # 10 English + 2 Hindi (0.4.10-multilang)
     genders = {m["gender"] for m in CATALOG.values()}
     assert genders == {"male", "female"}
     for slug, meta in CATALOG.items():
-        assert slug.startswith("en_US-") or slug.startswith("en_GB-"), slug
+        assert (
+            slug.startswith("en_US-")
+            or slug.startswith("en_GB-")
+            or slug.startswith("hi_IN-")
+        ), slug
         assert meta["quality"] in {"low", "medium", "high"}
         ls = meta.get("length_scale")
         assert ls is None or 0.5 <= float(ls) <= 1.5
         assert meta["name"] and meta["description"]
+        assert meta.get("language") in {"en", "hi"}
+    # 0.4.10: language metadata is coherent with the slug prefix
+    for slug, meta in CATALOG.items():
+        expected = "hi" if slug.startswith("hi_IN-") else "en"
+        assert meta["language"] == expected, slug
+
+
+def test_custom_entry_language_from_slug(models_tmp: Path) -> None:
+    """Non-catalog slugs get their language from the prefix, so a Hindi
+    model downloaded before a catalog update still reports honestly."""
+    (voices_dir(models_tmp) / "hi_IN-future-voice.onnx").write_bytes(b"f")
+    (voices_dir(models_tmp) / "zz_unknown_voice.onnx").write_bytes(b"f")
+    by_slug = {v["slug"]: v for v in installed_voices(models_tmp)}
+    assert by_slug["hi_IN-future-voice"]["language"] == "hi"
+    assert by_slug["zz_unknown_voice"]["language"] == "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -76,17 +95,22 @@ def test_resolve_specific_requires_file_on_disk(models_tmp: Path) -> None:
 def test_installed_merges_catalog_and_flags_custom(models_tmp: Path) -> None:
     vdir = voices_dir(models_tmp)
     (vdir / "en_US-amy-medium.onnx").write_bytes(b"f")
+    (vdir / "hi_IN-pratham-medium.onnx").write_bytes(b"f")
     (vdir / "my_custom_voice.onnx").write_bytes(b"f")
     voices = installed_voices(models_tmp)
     by_slug = {v["slug"]: v for v in voices}
     assert by_slug["en_US-amy-medium"]["name"] == "Amy"
     assert by_slug["en_US-amy-medium"]["custom"] is False
     assert by_slug["en_US-amy-medium"]["installed"] is True
+    assert by_slug["hi_IN-pratham-medium"]["name"] == "Pratham"
+    assert by_slug["hi_IN-pratham-medium"]["language"] == "hi"
     custom = by_slug["my_custom_voice"]
     assert custom["custom"] is True
     assert custom["name"] == "my_custom_voice"
-    # deterministic order: female catalog first, custom last
+    # deterministic order: English block first (female first), then
+    # other languages (0.4.10), custom last
     assert voices[0]["slug"] == "en_US-amy-medium"
+    assert voices[1]["slug"] == "hi_IN-pratham-medium"
     assert voices[-1]["slug"] == "my_custom_voice"
 
 
@@ -102,9 +126,20 @@ def test_catalog_summary_marks_installed(models_tmp: Path) -> None:
 def test_preset_for_known_and_unknown() -> None:
     assert preset_for("en_US-ryan-high") == pytest.approx(1.05)
     assert preset_for("en_US-amy-medium") == pytest.approx(0.95)
+    assert preset_for("hi_IN-pratham-medium") == pytest.approx(1.0)
+    assert preset_for("hi_IN-priyamvada-medium") == pytest.approx(1.0)
     assert preset_for("my_custom_voice") is None
     assert preset_for("auto") is None
     assert preset_for(None) is None
+
+
+def test_resolve_hindi_slug_requires_file_on_disk(models_tmp: Path) -> None:
+    """0.4.10: a Hindi voice resolves exactly like an English one once
+    its .onnx sits in the voices dir - the render path is language-agnostic."""
+    assert resolve_voice_path(models_tmp, "hi_IN-pratham-medium") is None
+    onnx = voices_dir(models_tmp) / "hi_IN-pratham-medium.onnx"
+    onnx.write_bytes(b"fake")
+    assert resolve_voice_path(models_tmp, "hi_IN-pratham-medium") == onnx
 
 
 # ---------------------------------------------------------------------------

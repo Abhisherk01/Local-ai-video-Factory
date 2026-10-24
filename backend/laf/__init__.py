@@ -5,4 +5,4 @@ managed child process. It binds to 127.0.0.1 exclusively and requires a
 per-session token for every data route (see ADR-008).
 """
 
-__version__ = "0.4.6-ui-info"
+__version__ = "0.4.10-multilang"

@@ -19,6 +19,11 @@ Method labels are honest by design (ADR-010):
 - tts_render         -> method "local_piper"   (or fallback tone)
 - tts_fallback       -> method "fallback_tone"
 - video_render       -> method "local_piper"   (or fallback tone)
+
+0.4.10-multilang: script_gen carries a language ("en"/"hi") chosen
+per request or detected from the topic (laf.lang). Hindi speaks the
+same 0.4.3 JSON contract with Devanagari values; English behaviour
+stays byte-identical to 0.4.8.
 """
 
 from __future__ import annotations
@@ -42,6 +47,12 @@ from laf.episodes import (
     get_episode,
     set_episode_script,
     set_episode_status,
+)
+from laf.lang import (
+    SCRIPT_SYSTEM_HI,
+    detect_language,
+    language_directive,
+    normalize_language,
 )
 from laf.series import (
     fallback_outline,
@@ -138,6 +149,12 @@ _SCRIPT_SYSTEM = (
     "No markdown fences, no commentary, no notes."
 )
 
+# 0.4.10-multilang: the English JSON system prompt above stays
+# byte-identical to 0.4.8 (pinned by tests/test_multilang.py);
+# Hindi speaks the same JSON contract with Devanagari values
+# (SCRIPT_SYSTEM_HI in laf.lang).
+_SCRIPT_SYSTEMS = {"en": _SCRIPT_SYSTEM, "hi": SCRIPT_SYSTEM_HI}
+
 
 def _script_from_json(blob: str) -> str:
     """Reassemble plain narration from the model's JSON fields.
@@ -161,18 +178,33 @@ def _script_from_json(blob: str) -> str:
     return text
 
 
-def _script_prompt(topic: str, target_words: int) -> str:
+def _script_prompt(topic: str, target_words: int, language: str = "en") -> str:
+    """0.4.10-multilang: appends laf.lang.language_directive - ""
+    for English keeps the pre-0.4.10 prompt byte-identical."""
     return (
         f"Topic: {topic}\n"
         f"Write the narration for a ~60 second vertical video (about "
         f"{target_words} words total across hook, body and cta). "
         f"Respond with only the JSON object described in the system "
         f"prompt."
+        f"{language_directive(language)}"
     )
 
 
-def _fallback_script(topic: str, target_words: int) -> str:
-    """Deterministic template script - the no-model pipeline path."""
+def _fallback_script(topic: str, target_words: int, language: str = "en") -> str:
+    """Deterministic template script - the no-model pipeline path.
+
+    0.4.10-multilang: Hindi episodes fall back to a Hindi template
+    so the narration never switches language mid-pipeline. The
+    topic text is embedded as-is, whatever script it uses."""
+    if language == "hi":
+        return (
+            f"हुक: {topic} को आसान भाषा में समझिए।\n"
+            f"{topic} के बारे में यह जानकारी आपके लिए ज़रूरी है। "
+            "इसे आसान भाषा में जानना हर किसी के लिए फ़ायदेमंद है। "
+            "यही सादगी इसे खास बनाती है।\n"
+            "सीटीए: ऐसी ही जानकारी के लिए फॉलो करें।"
+        )
     sentences = max(3, min(6, target_words // 30))
     body = " ".join(
         f"Point {i}: here is what matters about {topic} and why it "
@@ -209,17 +241,23 @@ def handle_script_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
     if not topic:
         raise RuntimeError("payload.topic is required")
     target_words = int(payload.get("target_words", 150))
+    # 0.4.10-multilang: explicit payload.language wins, else detect
+    # from the topic (Devanagari presence or an explicit hint).
+    language = normalize_language(payload.get("language")) or detect_language(
+        topic
+    )
 
     ollama = OllamaAdapter()
     status = ollama.available()
     if not status.available:
         if payload.get("allow_fallback"):
-            text = _fallback_script(topic, target_words)
+            text = _fallback_script(topic, target_words, language)
             _store_script(ctx, job, text, "fallback_template")
             return {
                 "method": "fallback_template",
                 "reason": status.detail,
                 "chars": len(text),
+                "language": language,
             }
         raise PrereqMissing(f"ollama_unavailable: {status.detail}")
 
@@ -230,12 +268,16 @@ def handle_script_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
     attempt = max(1, int(job.get("attempts") or 1))
     temperature = {1: 0.6, 2: 1.0, 3: 0.3}.get(attempt, 0.6)
     result = ollama.generate(
-        _script_prompt(topic, target_words),
-        system=_SCRIPT_SYSTEM,
+        _script_prompt(topic, target_words, language),
+        system=_SCRIPT_SYSTEMS[language],
         # 512 tok ≈ 2x the 150-word target. Bounds a runaway attempt to
         # ~1-2 min even on a partially-CPU-offloaded daemon (34%/66%
         # split class) instead of a blind 600 s timeout (jobs #33/#34).
-        num_predict=512,
+        # 0.4.10-multilang: Devanagari costs roughly 2-3x the
+        # tokens per word, so Hindi gets 768 to avoid clipping
+        # mid-script; the word-count guard below still rejects
+        # runaway output. English keeps 512 (0.4.8 behaviour).
+        num_predict=768 if language == "hi" else 512,
         # 0.4.3: grammar-constrained decoding - the same mechanism that
         # fixed storyboard/series on this model. Prose openers cannot
         # lead the output anymore; chatter may only ride inside JSON
@@ -264,6 +306,7 @@ def handle_script_gen(payload: dict, job: dict, ctx: HandlerContext) -> dict:
         "chars": len(result["text"]),
         "thinking_stripped": result["thinking_stripped"],
         "think_truncated": result.get("think_truncated", False),
+        "language": language,
     }
 
 
@@ -271,9 +314,18 @@ def handle_script_fallback(payload: dict, job: dict, ctx: HandlerContext) -> dic
     topic = str(payload.get("topic") or "").strip()
     if not topic:
         raise RuntimeError("payload.topic is required")
-    text = _fallback_script(topic, int(payload.get("target_words", 150)))
+    language = normalize_language(payload.get("language")) or detect_language(
+        topic
+    )
+    text = _fallback_script(
+        topic, int(payload.get("target_words", 150)), language
+    )
     _store_script(ctx, job, text, "fallback_template")
-    return {"method": "fallback_template", "chars": len(text)}
+    return {
+        "method": "fallback_template",
+        "chars": len(text),
+        "language": language,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -345,11 +397,25 @@ def _load_json_object(text: str) -> dict:
     return data
 
 
+# Sentence boundaries: terminal punctuation (". "/"! "/"? ") OR a line
+# break. qwen scripts are one beat per line and often omit the final
+# period - punctuation-only splitting collapsed those scripts to a
+# single "sentence", which collapsed the whole storyboard to 1 scene
+# (ep10 rendered 22 s on one static card).
+# laf 0.4.8-scenecount rev3
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _sentences(script: str) -> list[str]:
+    """Split a script into beats at punctuation and/or line breaks."""
+    return [s.strip() for s in _SENTENCE_SPLIT.split(script) if s.strip()]
+
+
 def _scene_count(script: str) -> int:
     """Target scene count from script length (~35 words per scene),
     clamped to 3-8 and never more than the sentence count."""
     words = len(script.split())
-    sentences = [s for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+    sentences = _sentences(script)
     n = max(3, min(8, words // 35))
     return max(1, min(n, len(sentences)))
 
@@ -361,7 +427,7 @@ def _split_narration(script: str, n: int) -> list[str]:
     possible. Concatenated slices reproduce the whole script, so no
     narration is ever lost or invented between scenes.
     """
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+    sentences = _sentences(script)
     if not sentences:  # single unpunctuated line
         sentences = [script.strip()]
     base, extra = divmod(len(sentences), n)
@@ -447,7 +513,8 @@ def _storyboard_prompt(script: str, n: int, style: dict) -> str:
         'Return ONLY JSON like {"shots": ["shot one", "shot two"]} '
         f"with exactly {n} items. Each item is one concrete on-screen "
         "shot description (subject, action, framing, lighting) in the "
-        "given style, max 25 words."
+        "given style, max 25 words. The narration may be in any "
+        "language - write every shot description in English anyway."
     )
 
 

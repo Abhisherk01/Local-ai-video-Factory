@@ -351,7 +351,7 @@ export default function Pipeline({ version }: PipelineProps) {
         <div className="flex items-center justify-between">
           <h2 className="text-section text-ink">Episodes</h2>
           <span className="font-mono text-caption text-ink-mute">
-            {episodes.length} - info v4
+            {episodes.length} - fit v5
           </span>
         </div>
         {episodes.length === 0 ? (
@@ -533,10 +533,17 @@ export default function Pipeline({ version }: PipelineProps) {
                     </p>
                   )}
                   {mp4Path && (
-                    <p className="truncate font-mono text-caption text-success">
-                      mp4: {mp4Path}
-                      {mp4Dur != null ? ` (${mp4Dur.toFixed(1)}s)` : ""}
-                      {mp4Voice ? ` - voice: ${mp4Voice}` : ""}
+                    <p className="flex min-w-0 items-baseline gap-2 font-mono text-caption text-success">
+                      <span className="min-w-0 truncate" title={mp4Path}>
+                        mp4: {mp4Path}
+                      </span>
+                      {(mp4Dur != null || mp4Voice) && (
+                        <span className="shrink-0 whitespace-nowrap">
+                          {mp4Dur != null ? `(${mp4Dur.toFixed(1)}s)` : ""}
+                          {mp4Dur != null && mp4Voice ? " - " : ""}
+                          {mp4Voice ? `voice: ${mp4Voice}` : ""}
+                        </span>
+                      )}
                     </p>
                   )}
                   {infoOpenFor === ep.id && (

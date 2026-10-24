@@ -26,9 +26,15 @@ rules from ADR-010):
   usable (``custom: true``) - the registry never hides an installed
   model.
 
-The ten catalog entries below were each verified against the
-rhasspy/piper-voices v1.0.0 release (both files exist); the
-``scripts/add_voice.ps1`` helper downloads them by short name.
+The catalog below was each verified against the rhasspy/piper-voices
+v1.0.0 release (both files exist); the ``scripts/add_voice.ps1`` helper
+downloads them by short name.
+
+0.4.10-multilang: entries carry a ``language`` code ("en"/"hi") so the
+UI can group voices honestly; custom (non-catalog) slugs get their
+language from the slug prefix. The two ``hi_IN`` voices are the official
+Piper Hindi models (espeak "hi" phonemes), so a Hindi voice requires a
+Devanagari script - generate the episode with language "hi" first.
 """
 
 from __future__ import annotations
@@ -38,7 +44,25 @@ from typing import Any
 
 # slug -> metadata. name/gender/quality/description are UI labels;
 # length_scale is applied at synthesis time when the voice is used.
+# language (0.4.10) is the narration language the voice can read.
 CATALOG: dict[str, dict[str, Any]] = {
+    # -- hindi (0.4.10-multilang) ---------------------------------------
+    "hi_IN-priyamvada-medium": {
+        "name": "Priyamvada",
+        "gender": "female",
+        "quality": "medium",
+        "description": "Hindi narrator - warm, classic female read",
+        "length_scale": 1.0,
+        "language": "hi",
+    },
+    "hi_IN-pratham-medium": {
+        "name": "Pratham",
+        "gender": "male",
+        "quality": "medium",
+        "description": "Hindi narrator - clear, natural male read",
+        "length_scale": 1.0,
+        "language": "hi",
+    },
     # -- female ---------------------------------------------------------
     "en_US-amy-medium": {
         "name": "Amy",
@@ -46,6 +70,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "medium",
         "description": "warm, friendly narrator",
         "length_scale": 0.95,
+        "language": "en",
     },
     "en_US-lessac-medium": {
         "name": "Lessac",
@@ -53,6 +78,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "medium",
         "description": "clear, neutral broadcast read",
         "length_scale": 1.0,
+        "language": "en",
     },
     "en_US-kathleen-low": {
         "name": "Kathleen",
@@ -60,6 +86,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "low",
         "description": "soft, close-mic calm (16 kHz source)",
         "length_scale": 1.0,
+        "language": "en",
     },
     "en_US-kristin-medium": {
         "name": "Kristin",
@@ -67,6 +94,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "medium",
         "description": "bright, upbeat energy",
         "length_scale": 0.92,
+        "language": "en",
     },
     "en_US-hfc_female-medium": {
         "name": "Harper",
@@ -74,6 +102,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "medium",
         "description": "steady, documentary composure",
         "length_scale": 1.0,
+        "language": "en",
     },
     # -- male -----------------------------------------------------------
     "en_US-ryan-high": {
@@ -82,6 +111,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "high",
         "description": "deep, measured trailer read",
         "length_scale": 1.05,
+        "language": "en",
     },
     "en_US-joe-medium": {
         "name": "Joe",
@@ -89,6 +119,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "medium",
         "description": "gritty baritone, gritty texture",
         "length_scale": 1.08,
+        "language": "en",
     },
     "en_US-norman-medium": {
         "name": "Norman",
@@ -96,6 +127,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "medium",
         "description": "solid, authoritative delivery",
         "length_scale": 1.05,
+        "language": "en",
     },
     "en_US-hfc_male-medium": {
         "name": "Marcus",
@@ -103,6 +135,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "medium",
         "description": "warm mid-baritone",
         "length_scale": 1.02,
+        "language": "en",
     },
     "en_GB-alan-low": {
         "name": "Alan",
@@ -110,6 +143,7 @@ CATALOG: dict[str, dict[str, Any]] = {
         "quality": "low",
         "description": "gentle British read (16 kHz source)",
         "length_scale": 1.0,
+        "language": "en",
     },
 }
 
@@ -122,6 +156,15 @@ def voices_dir(models_dir: str | Path | None) -> Path:
     return Path(models_dir) / VOICES_SUBDIR if models_dir else Path()
 
 
+def _slug_language(slug: str) -> str:
+    """Best-effort language from the slug prefix (HuggingFace layout)."""
+    if slug.startswith("hi_IN-") or slug.startswith("hi-"):
+        return "hi"
+    if slug.startswith("en_") or slug.startswith("en-"):
+        return "en"
+    return "unknown"
+
+
 def _entry(slug: str, *, installed: bool) -> dict[str, Any]:
     meta = CATALOG.get(slug)
     if meta is None:
@@ -132,6 +175,7 @@ def _entry(slug: str, *, installed: bool) -> dict[str, Any]:
             "quality": "unknown",
             "description": "custom installed voice (not in catalog)",
             "length_scale": None,
+            "language": _slug_language(slug),
             "custom": True,
             "installed": installed,
         }
@@ -142,6 +186,7 @@ def _entry(slug: str, *, installed: bool) -> dict[str, Any]:
         "quality": meta["quality"],
         "description": meta["description"],
         "length_scale": meta.get("length_scale"),
+        "language": meta.get("language") or _slug_language(slug),
         "custom": False,
         "installed": installed,
     }
@@ -150,9 +195,11 @@ def _entry(slug: str, *, installed: bool) -> dict[str, Any]:
 def installed_voices(models_dir: str | Path | None) -> list[dict[str, Any]]:
     """Every usable voice on disk, catalog metadata merged in.
 
-    Order: female first then male, alphabetical by display name -
-    deterministic for the UI dropdown. Custom (non-catalog) voices sort
-    last by slug.
+    Order: English catalog first then other languages (within each
+    language female before male, alphabetical by display name), custom
+    (non-catalog) voices last by slug. Deterministic for the UI
+    dropdown; 0.4.10 adds the language group so Hindi voices do not
+    hide inside the English block.
     """
     found: list[dict[str, Any]] = []
     vdir = voices_dir(models_dir)
@@ -160,11 +207,14 @@ def installed_voices(models_dir: str | Path | None) -> list[dict[str, Any]]:
         for onnx in sorted(vdir.glob("*.onnx")):
             found.append(_entry(onnx.stem, installed=True))
 
-    def sort_key(entry: dict[str, Any]) -> tuple[int, str, str]:
+    _LANG_RANK = {"en": 0, "hi": 1}
+
+    def sort_key(entry: dict[str, Any]) -> tuple[int, int, str, str]:
         if entry["custom"]:
-            return (2, entry["slug"], "")
+            return (2, 0, entry["slug"], "")
         gender_rank = 0 if entry["gender"] == "female" else 1
-        return (gender_rank, entry["name"], entry["slug"])
+        lang_rank = _LANG_RANK.get(entry.get("language", "en"), 2)
+        return (lang_rank, gender_rank, entry["name"], entry["slug"])
 
     return sorted(found, key=sort_key)
 
@@ -198,8 +248,17 @@ def catalog_summary(models_dir: str | Path | None) -> list[dict[str, Any]]:
 
     Powers the "how to add more voices" story: the UI can show which
     catalog voices are NOT yet downloaded (scripts/add_voice.ps1).
+    Sorted like installed_voices: English block, then other languages.
     """
     vdir = voices_dir(models_dir)
     installed_slugs = {p.stem for p in vdir.glob("*.onnx")} if vdir.is_dir() else set()
     entries = [_entry(slug, installed=slug in installed_slugs) for slug in CATALOG]
-    return sorted(entries, key=lambda e: (0 if e["gender"] == "female" else 1, e["name"]))
+    _LANG_RANK = {"en": 0, "hi": 1}
+    return sorted(
+        entries,
+        key=lambda e: (
+            _LANG_RANK.get(e.get("language", "en"), 2),
+            0 if e["gender"] == "female" else 1,
+            e["name"],
+        ),
+    )

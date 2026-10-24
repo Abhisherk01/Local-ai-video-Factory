@@ -1,0 +1,160 @@
+"""Narration language support (0.4.10-multilang).
+
+Single source of truth for everything language-aware in the factory.
+
+Design contract:
+
+- ``detect_language`` infers the narration language for an episode from
+  its topic text. Devanagari presence wins, explicit "in hindi"-style
+  hints come second, everything else stays English. Deliberately
+  conservative: a false "hi" flips a whole script (and its captions)
+  to Hindi, while a false "en" only costs an explicit ``language``
+  field on the script request. A topic that merely MENTIONS Hindi
+  ("Hindi cinema history") therefore stays English.
+- Per-language SYSTEM prompts ship as worked EXAMPLES, not just rules.
+  qwen3-class models follow demonstrations far better than instructions
+  (0.4.2 field lesson: the English few-shot example is the single most
+  effective anti-chatter device), so the Hindi path gets its own
+  Devanagari few-shot demonstration instead of asking an English
+  example to produce Hindi. ``SCRIPT_SYSTEM_EN`` is byte-identical to
+  the pre-0.4.10 ``_SCRIPT_SYSTEM``.
+- ``language_directive`` is the per-request instruction appended to the
+  user prompt. English returns "" - the pre-0.4.10 prompt is unchanged.
+- ``copied_example`` keeps the demonstration from leaking into a stored
+  script, per language. Hindi sentinels pair each Devanagari word with
+  its Latin transliteration so a legitimate topic written in Latin
+  ("monsoon facts") does not trigger a false positive.
+- Audio vs. visuals: narration and burned captions follow the script
+  language; storyboard SHOT descriptions are requested in English on
+  purpose (they are planning metadata for the style compositor, not
+  viewer-facing text). Voice discovery stays in ``laf.voices`` - the
+  ``hi_IN-*`` catalog entries carry ``language`` metadata so the UI can
+  group them honestly.
+"""
+
+from __future__ import annotations
+
+import re
+
+LANGUAGE_CODES = ("en", "hi")
+
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "hi": "Hindi (हिन्दी)",
+}
+
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
+
+# Explicit request hints (Latin script). Bare "hindi" is NOT a hint on
+# purpose - "Hindi cinema" is a subject, not a language request.
+_HI_HINTS = (
+    "हिंदी",
+    "in hindi",
+    "hindi script",
+    "hindi narration",
+    "hindi language",
+    "hindi mein",
+    "write in hindi",
+    "write hindi",
+)
+
+SCRIPT_SYSTEM_EN = (
+    "You write short-form vertical video narration scripts. "
+    "Output ONLY the narration script as plain text: one HOOK line, "
+    "3-5 BODY sentences, one CTA line. No markdown, no headings, no "
+    "stage directions, no emojis. Never explain, never plan, never "
+    "restate the task: your very first word must be the first word "
+    "of the HOOK line.\n"
+    "Example of a correct reply (for the topic \"volcanoes\"):\n"
+    "Beneath your feet, rock is biding its time.\n"
+    "Magma pools in chambers the size of city blocks.\n"
+    "Pressure builds for centuries, then releases in minutes.\n"
+    "One eruption can cool the whole planet for a year.\n"
+    "Scientists read the warning signs so you do not have to.\n"
+    "Follow for more."
+)
+
+SCRIPT_SYSTEM_HI = (
+    "You write short-form vertical video narration scripts in HINDI. "
+    "Output ONLY the narration script as plain text in Hindi "
+    "(Devanagari script): one HOOK line, 3-5 BODY sentences, one CTA "
+    "line. No markdown, no headings, no stage directions, no emojis, "
+    "no English words, no Hinglish - never write Hindi using Latin "
+    "letters. Spell out every number in Hindi words. Never explain, "
+    "never plan, never restate the task: your very first word must be "
+    "the first word of the HOOK line.\n"
+    "Example of a correct reply (for the topic \"monsoon\"):\n"
+    "मानसून का मौसम आया, और पूरा शहर जैसे जी उठा।\n"
+    "बादल घटते हैं, और हवा में मिट्टी की खुशबू घुल जाती है।\n"
+    "किसान इस बरसात को अपनी फसल की जान मानते हैं।\n"
+    "नदियाँ और तालाब दोबारा जीवित हो उठते हैं।\n"
+    "लेकिन ज़्यादा बारिश शहरों की परेशानी भी बन जाती है।\n"
+    "मौसम की हर खबर के लिए फॉलो ज़रूर करें।"
+)
+
+SCRIPT_SYSTEMS = {"en": SCRIPT_SYSTEM_EN, "hi": SCRIPT_SYSTEM_HI}
+
+# Demonstration sentinels. English: words that exist only in the
+# volcano example. Hindi: (Devanagari word, Latin transliteration)
+# pairs from the monsoon example - the Latin half guards against a
+# false positive when the TOPIC itself is the example subject written
+# in Latin script.
+EXAMPLE_SENTINELS_EN = ("volcano", "magma", "erupt")
+EXAMPLE_SENTINELS_HI = (
+    ("मानसून", "monsoon"),
+    ("बादल", "cloud"),
+    ("बरसात", "rain"),
+    ("किसान", "farmer"),
+)
+
+
+def normalize_language(value: object) -> str | None:
+    """Explicit language field -> clean code, or None if unset/unknown."""
+    code = str(value or "").strip().lower()
+    return code if code in LANGUAGE_CODES else None
+
+
+def detect_language(text: str) -> str:
+    """Infer the narration language from topic text. Never raises."""
+    t = str(text or "")
+    if _DEVANAGARI_RE.search(t):
+        return "hi"
+    low = t.lower()
+    return "hi" if any(h in low for h in _HI_HINTS) else "en"
+
+
+def language_name(code: str) -> str:
+    return _LANGUAGE_NAMES.get(str(code or "").lower(), "English")
+
+
+def language_directive(language: str) -> str:
+    """Per-request instruction appended to the script prompt.
+
+    "" for English keeps the pre-0.4.10 prompt byte-identical.
+    """
+    if str(language or "").lower() != "hi":
+        return ""
+    return (
+        "\nIMPORTANT: Write the ENTIRE narration script in HINDI, "
+        "using Devanagari script (देवनागरी) only. No English words and "
+        "no Hinglish - never write Hindi in Latin letters. Spell out "
+        "every number in Hindi words. Keep the Hindi simple, warm and "
+        "spoken-style, so it sounds natural when read aloud."
+    )
+
+
+def copied_example(text: str, topic: str, language: str = "en") -> bool:
+    """True when the model parroted the system-prompt demonstration.
+
+    Pre-0.4.10 English behaviour is preserved exactly; Hindi adds the
+    transliteration guard described in the module docstring.
+    """
+    t = str(topic or "").lower()
+    if str(language or "").lower() == "hi":
+        for dev, latin in EXAMPLE_SENTINELS_HI:
+            if dev in text and dev not in t and latin not in t:
+                return True
+        return False
+    return any(s in text.lower() for s in EXAMPLE_SENTINELS_EN) and not any(
+        s in t for s in EXAMPLE_SENTINELS_EN
+    )

@@ -393,6 +393,48 @@ def subtitle_events(
     return events
 
 
+# --- 0.4.10-multilang: Devanagari caption support ------------------
+# Captions are burned via libass, which shapes complex scripts through
+# HarfBuzz - but only if the selected font actually has the glyphs.
+# Arial does not cover Devanagari, so a Hindi caption would burn as
+# boxes. When any caption/title contains Devanagari, the ASS Fontname
+# switches to Noto Sans Devanagari and the bundled TTF is staged next
+# to subs.ass (fontsdir=.) so libass finds it without a system install.
+
+
+def _has_devanagari(text: str) -> bool:
+    return any("\u0900" <= ch <= "\u097f" for ch in str(text or ""))
+
+
+def _caption_font(texts: list) -> str:
+    if any(_has_devanagari(t) for t in texts):
+        return "Noto Sans Devanagari"
+    return "Arial"
+
+
+def _stage_caption_font(workdir, models_dir) -> None:
+    """Copy the bundled Devanagari TTF next to subs.ass (best effort)."""
+    import os
+
+    name = "NotoSansDevanagari-Regular.ttf"
+    candidates = []
+    if models_dir:
+        candidates.append(Path(models_dir) / "piper" / "fonts" / name)
+    env_dir = os.environ.get("LAF_FONTS_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir) / name)
+    here = Path(__file__).resolve().parent / "fonts" / name
+    candidates.append(here)
+    try:
+        for src in candidates:
+            if src.exists():
+                Path(workdir).mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, Path(workdir) / name)
+                return
+    except Exception:
+        pass  # captions fall back to system fonts; audio is unaffected
+
+
 def _ass_time(t: float) -> str:
     centis = int(round(max(0.0, t) * 100))
     h, rem = divmod(centis, 360_000)
@@ -426,6 +468,9 @@ def write_ass(
     resolves on Windows out of the box and maps to Liberation Sans on
     Linux via fontconfig.
     """
+    caption_font = _caption_font(
+        [str(title or "")] + [str(ev[2]) for ev in events]
+    )
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -438,9 +483,9 @@ def write_ass(
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Title,Arial,{int(height * 0.028)},&H00FFFFFF,&H00FFFFFF,"
+        f"Style: Title,{caption_font},{int(height * 0.028)},&H00FFFFFF,&H00FFFFFF,"
         "&H00000000,&H96000000,0,0,0,0,100,100,0,0,1,2,1,8,80,80,120,1\n"
-        f"Style: Caption,Arial,{int(height * 0.032)},&H00FFFFFF,&H00FFFFFF,"
+        f"Style: Caption,{caption_font},{int(height * 0.032)},&H00FFFFFF,&H00FFFFFF,"
         "&H00000000,&H00000000,0,0,0,0,100,100,0,0,3,3,0,2,90,90,140,1\n"
         "\n"
         "[Events]\n"
@@ -566,7 +611,7 @@ def concat_clips(
             prev_a = label
         amap = f"[{prev_a}]"
     del width, height  # caption scaling lives in the ass PlayRes header
-    parts.append(f"[{vchain}]subtitles={ass_name}[vout]")
+    parts.append(f"[{vchain}]subtitles={ass_name}:fontsdir=.[vout]")
     cmd += [
         "-filter_complex", ";".join(parts),
         "-map", "[vout]", "-map", amap,
@@ -721,6 +766,7 @@ def render_episode(
             )
 
         events = subtitle_events(scenes, durations, scene_starts(durations))
+        _stage_caption_font(workdir, models_dir)
         write_ass(workdir / "subs.ass", events, title, width=width, height=height)
         total = round(sum(durations) - TRANSITION_S * (len(durations) - 1), 2)
         concat_clips(

@@ -185,3 +185,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
   cluster (style + voice + buttons) moved to its own wrapping line
   instead of a `shrink-0` right-hand cluster that overflowed the
   max-w-3xl card and painted over the next row.
+
+## 0.4.7 - UI fit: render line keeps duration + voice visible
+
+### Fixed
+- The green render line truncated as a whole, so on real Windows paths
+  the `(32.5s)` duration and the `- voice: en_US-ryan-high` suffix were
+  always cut off. The line is now a flex row: the path truncates (hover
+  it for the full path via tooltip) while the duration and voice stay
+  pinned at the end and never clip.
+- Header proof tag bumped to `fit v5`.
+
+## 0.4.8 - Storyboard scenes: newline-aware beat splitting
+
+### Fixed
+- Scripts written as one beat per line with no terminal punctuation
+  (a qwen3 habit) counted as a SINGLE sentence, so the storyboard
+  collapsed to 1 scene and short episodes rendered as one static
+  card for their whole runtime (ep10: 22 s on one card).
+- Sentence splitting now treats a line break as a boundary too, in
+  both the scene-count estimator and the narration splitter. Short
+  unpunctuated scripts now get the 3-scene floor; properly
+  punctuated scripts are unaffected.
+- Re-run Storyboard on any 1-scene episode to rebuild it, then
+  Render again.

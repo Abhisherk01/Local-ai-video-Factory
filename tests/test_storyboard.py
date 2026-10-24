@@ -70,6 +70,38 @@ def test_split_narration_conserves_every_sentence(env) -> None:
     assert " ".join(slices) == script  # nothing lost, nothing invented
 
 
+def test_scene_counts_newline_beats_without_punctuation() -> None:
+    # qwen writes one beat per line and often omits the final period;
+    # punctuation-only splitting collapsed these scripts to 1 scene
+    # (ep10 rendered 22 s on a single static card).
+    script = "\n".join(
+        [
+            "Your phone camera just got a superpower",
+            "AI now handles focus and exposure automatically",
+            "Real time editing polishes videos for you",
+            "No more hours of manual timeline work",
+            "Follow for the next camera trick",
+        ]
+    )
+    assert _scene_count(script) == 3  # ~28 words -> floor of the 3-8 clamp
+
+
+def test_split_narration_covers_newline_beats_without_loss() -> None:
+    script = "Hook line one\nBeat number two here\nFinal call to action"
+    slices = _split_narration(script, 3)
+    assert len(slices) == 3
+    # Same words, same order (line breaks become spaces in spoken text).
+    assert " ".join(slices).split() == script.split()
+
+
+def test_punctuated_script_scene_count_reaches_eight() -> None:
+    # Regression guard: the newline alternative must not under-count
+    # properly punctuated scripts.
+    sentence = " ".join(f"w{i}" for i in range(40))
+    long = ". ".join([sentence] * 10)
+    assert _scene_count(long) == 8
+
+
 def test_fallback_storyboard_scripts_episode_and_stores_scenes(env) -> None:
     ep = _scripted(env)
     job = _job(env, "storyboard_fallback", ep["id"])

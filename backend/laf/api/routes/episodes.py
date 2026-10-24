@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from laf.api.state import AppState
 from laf.episodes import create_episode, delete_episode, get_episode, list_episodes
 from laf.jobs import queue
+from laf.lang import detect_language
 from laf.styles import get_style
 from laf.storyboards import get_storyboard
 from laf.voices import resolve_voice_path
@@ -25,6 +26,10 @@ class EpisodeCreate(BaseModel):
 class ScriptRequest(BaseModel):
     mode: str = Field(default="auto", pattern="^(auto|model|template)$")
     allow_fallback: bool = True
+    # 0.4.10-multilang: "en"/"hi". None -> detect from the episode topic
+    # (Devanagari presence or an explicit "in hindi"-style hint wins;
+    # everything else stays English). Omitted field = pre-0.4.10 body.
+    language: str | None = Field(default=None, pattern="^(en|hi)$")
     idempotency_key: str | None = Field(default=None, max_length=200)
 
 
@@ -79,20 +84,30 @@ def enqueue_script(episode_id: int, payload: ScriptRequest, request: Request) ->
                      unless allow_fallback, then uses the template)
     mode=template -> script_fallback (deterministic template, no model)
     mode=auto     -> script_gen with allow_fallback from the payload
+
+    0.4.10-multilang: ``language`` rides into the job payload so the
+    handler generates Devanagari narration (and a matching fallback
+    template) when the episode is Hindi. Resolution order: explicit
+    request field -> detect_language(topic) -> "en". The stored value
+    is what actually decided the language, so job results report it
+    honestly.
     """
     state: AppState = request.app.state.laf
     episode = get_episode(state.conn, episode_id)
     if episode is None:
         raise HTTPException(status_code=404, detail="episode not found")
 
+    language = payload.language or detect_language(str(episode["topic"]))
+
     if payload.mode == "template":
         job_type = "script_fallback"
-        job_payload = {"topic": episode["topic"]}
+        job_payload = {"topic": episode["topic"], "language": language}
     else:
         job_type = "script_gen"
         job_payload = {
             "topic": episode["topic"],
             "allow_fallback": payload.allow_fallback,
+            "language": language,
         }
 
     job, created = queue.enqueue(

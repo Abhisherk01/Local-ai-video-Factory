@@ -1,8 +1,10 @@
-# Local AI Video Factory - piper voice downloader (0.4.5-voices)
+# Local AI Video Factory - piper voice downloader (0.4.5-voices, 0.4.10-multilang)
 #
 # Usage (PowerShell, from the repo root):
 #   .\scripts\add_voice.ps1 ryan
 #   .\scripts\add_voice.ps1 amy
+#   .\scripts\add_voice.ps1 pratham        # Hindi male (0.4.10)
+#   .\scripts\add_voice.ps1 priyamvada     # Hindi female (0.4.10)
 #   .\scripts\add_voice.ps1 -Name en_US-joe-medium     # full slug works too
 #   .\scripts\add_voice.ps1 -List                      # show catalog + installed
 #
@@ -20,22 +22,27 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # 10x faster Invoke-WebRequest on PS 5.1
 
-# short name -> slug (all ten verified against the v1.0.0 release)
+# short name -> slug (all verified against the v1.0.0 release)
 $Catalog = @{
-    "amy"      = "en_US-amy-medium"
-    "lessac"   = "en_US-lessac-medium"
-    "kathleen" = "en_US-kathleen-low"
-    "kristin"  = "en_US-kristin-medium"
-    "harper"   = "en_US-hfc_female-medium"
-    "ryan"     = "en_US-ryan-high"
-    "joe"      = "en_US-joe-medium"
-    "norman"   = "en_US-norman-medium"
-    "marcus"   = "en_US-hfc_male-medium"
-    "alan"     = "en_GB-alan-low"
+    "pratham"    = "hi_IN-pratham-medium"
+    "priyamvada" = "hi_IN-priyamvada-medium"
+    "amy"        = "en_US-amy-medium"
+    "lessac"     = "en_US-lessac-medium"
+    "kathleen"   = "en_US-kathleen-low"
+    "kristin"    = "en_US-kristin-medium"
+    "harper"     = "en_US-hfc_female-medium"
+    "ryan"       = "en_US-ryan-high"
+    "joe"        = "en_US-joe-medium"
+    "norman"     = "en_US-norman-medium"
+    "marcus"     = "en_US-hfc_male-medium"
+    "alan"       = "en_GB-alan-low"
 }
 
-# slug -> repo path under https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/
+# slug -> repo path under https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/
 function Get-VoicePath([string]$slug) {
+    if ($slug -match '^hi_IN-([a-z0-9_]+)-(low|medium|high)$') {
+        return "hi/hi_IN/$($Matches[1])/$($Matches[2])/$slug"
+    }
     if ($slug -match '^en_(US|GB)-([a-z0-9_]+)-(low|medium|high)$') {
         return "en/en_$($Matches[1])/$($Matches[2])/$($Matches[3])/$slug"
     }
@@ -77,7 +84,8 @@ if ($List) {
 if (-not $Name) {
     Write-Host "Usage: .\scripts\add_voice.ps1 <name>   e.g. .\scripts\add_voice.ps1 ryan"
     Write-Host "       .\scripts\add_voice.ps1 -List     catalog + installed voices"
-    Write-Host "Names: $($Catalog.Keys -join ', ')"
+    Write-Host "English: $($Catalog.Keys | Where-Object { $Catalog[$_] -like 'en_*' } | Sort-Object)"
+    Write-Host "Hindi:   pratham, priyamvada  (0.4.10 - needs a Hindi/Devanagari script)"
     return
 }
 
